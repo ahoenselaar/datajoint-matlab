@@ -226,7 +226,7 @@ classdef BaseRelvar < dj.GeneralRelvar
             validateDecimalData(self, tuples);
             
             % Cache some values for efficiency
-	        full_tab_name = self.tab.fullTableName;
+            full_tab_name = self.tab.fullTableName;
             connection = self.schema.conn;
             
             % form query
@@ -262,18 +262,20 @@ classdef BaseRelvar < dj.GeneralRelvar
                         assert((isscalar(v) && isnumeric(v)) || isempty(v),...
                             'The field %s must be a numeric scalar value', ...
                             header(i).name)
-                        if strcmp(header(i).type, 'bigint')
-                            queryStr = sprintf('%s`%s`=%d,',...
-                                queryStr, header(i).name, v);
-                        elseif strcmp(header(i).type, 'bigint unsigned')
-                            queryStr = sprintf('%s`%s`=%u,',...
-                                queryStr, header(i).name, v);
-                        elseif isempty(v) && header(i).isautoincrement
-                            queryStr = sprintf('%s`%s`=NULL,',...
-                                queryStr, header(i).name);
-                        elseif ~isnan(v) && ~isempty(v)  % nans are not passed: assumed missing.
-                            queryStr = sprintf('%s`%s`=%1.16g,',...
-                                queryStr, header(i).name, v);
+                        if ~isnan(v)  % nans are not passed: assumed missing.
+                            if strcmp(header(i).type, 'bigint')
+                                queryStr = sprintf('%s`%s`=%d,',...
+                                    queryStr, header(i).name, v);
+                            elseif strcmp(header(i).type, 'bigint unsigned')
+                                queryStr = sprintf('%s`%s`=%u,',...
+                                    queryStr, header(i).name, v);
+                            elseif isempty(v) && header(i).isautoincrement
+                                queryStr = sprintf('%s`%s`=NULL,',...
+                                    queryStr, header(i).name);
+                            elseif ~isempty(v)  % nans are not passed: assumed missing.
+                                queryStr = sprintf('%s`%s`=%1.16g,',...
+                                    queryStr, header(i).name, v);
+                            end
                         end
                     end
                 end
