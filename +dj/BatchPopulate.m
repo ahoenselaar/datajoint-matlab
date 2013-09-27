@@ -58,18 +58,3 @@ classdef BatchPopulate < dj.AutoPopulate
         end
     end
 end
-
-
-
-
-function path_kw = batch_path_keyword()
-% Returns the keyword that is used to pass the user path
-% to a cluster job. This is due to ridiculous API
-% changes in the PCT by Mathworks.
-
-if verLessThan('matlab', '7.12')
-    path_kw =  'PathDependencies';
-else
-    path_kw = 'AdditionalPaths';
-end
-end

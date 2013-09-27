@@ -71,7 +71,7 @@ classdef AutoPopulate < handle
             %   populate(tp.OriMaps, 'mouse_id=12')    % populate OriMaps for mouse 12
             %   [failedKeys, errs] = populate(tp.OriMaps);  % skip errors and return their list
             %
-            % See also dj.AutoPopulate/parpopulate
+            % See also dj.AutoPopulate/parpopulate, dj.AutoPopulate/makeTuples
             
             self.populateSanityChecks
             self.schema.conn.cancelTransaction  % rollback any unfinished transaction

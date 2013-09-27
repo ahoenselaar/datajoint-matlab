@@ -75,7 +75,6 @@ classdef Schema < handle
             self.reload(false)
             if isempty(self.dependencies)
                 % reload table dependencies
-                tic, fprintf('loading table dependencies... ')
                 foreignKeys = dj.struct.fromFields(self.conn.query(sprintf([...
                     'SELECT'...
                     ' table_schema AS from_schema,'...
@@ -131,7 +130,6 @@ classdef Schema < handle
                         end
                     end
                 end
-                fprintf('%.3g s\n', toc)
                 self.tableLevels = levels;
             end
             val = self.dependencies;
@@ -493,8 +491,6 @@ classdef Schema < handle
             self.tableLevels = [];
             
             % reload schema information into memory: table names and field named.
-            fprintf('loading table definitions from %s... ', self.dbname)
-            tic
             self.tables = self.conn.query(sprintf([...
                 'SELECT table_name AS name, table_comment AS comment ' ...
                 'FROM information_schema.tables ' ...
@@ -517,17 +513,18 @@ classdef Schema < handle
             
             % read field information
             if ~isempty(self.tables)
-                fprintf('%.3g s\nloading field information... ', toc), tic
                 self.header = self.conn.query(sprintf([...
                     'SELECT table_name AS `table`, column_name as `name`,'...
                     '(column_key="PRI") AS `iskey`,column_type as `type`,'...
                     '(is_nullable="YES") AS isnullable, column_comment as `comment`,'...
+                    '(extra REGEXP "auto_increment") AS `isautoincrement`,'...
                     'if(is_nullable="YES","NULL",ifnull(CAST(column_default AS CHAR),"<<<no default>>>"))  AS `default` '...
                     'FROM information_schema.columns '...
                     'WHERE table_schema="%s" and table_name REGEXP "{S}"'],...
                     self.dbname),self.tableRegexp);
                 self.header.isnullable = logical(self.header.isnullable);
                 self.header.iskey = logical(self.header.iskey);
+                self.header.isautoincrement = logical(self.header.isautoincrement);
                 self.header.isNumeric = ~cellfun(@(x) isempty(regexp(sprintf('%s',x), ...
                     '^((tiny|small|medium|big)?int|decimal|double|float)', 'once')), self.header.type);
                 self.header.isString = ~cellfun(@(x) isempty(regexp(sprintf('%s',x), ...
@@ -546,10 +543,20 @@ classdef Schema < handle
                     error('unsupported field type "%s" in %s.%s', ...
                         self.header(ix).type, self.header.table(ix), self.header.name(ix));
                 end
-                fprintf('%.3g\n',toc)
             end
         end
         
+        function optimize(self)
+            % Optimize all tables in this schema
+            sel_local = strncmp([self.dbname '.'], self.classNames, ...
+                numel(self.dbname)+1);
+            for cn=self.classNames(sel_local)
+                tab = dj.Table(cn{1});
+                fprintf([cn{1} ':'])
+                tab.optimize();
+            end
+        end
+
         
         function names = getParents(self, className, hierarchy, crossSchemas)
             % retrieve the class names of the parents of given table classes

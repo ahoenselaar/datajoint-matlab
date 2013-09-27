@@ -19,6 +19,9 @@ classdef GeneralRelvar < matlab.mixin.Copyable
     properties(SetAccess=private, GetAccess=protected)
         operator          % node type: table, join, or pro
         operands = {}     % list of operands
+        compilation_cached = false    % Whether compilation has to be performed
+        cached_header = [];
+        cached_sql = [];
     end
     
     methods
@@ -33,15 +36,25 @@ classdef GeneralRelvar < matlab.mixin.Copyable
         end
         
         function header = get.header(self)
-            header = self.compile;
+            if ~self.compilation_cached
+                [self.cached_header, self.cached_sql] = self.compile();
+                self.compilation_cached = true;
+            end
+            % header = self.compile();
+            header = self.cached_header;
         end
         
         function s = get.sql(self)
-            [~, s] = self.compile;
+            if ~self.compilation_cached
+                [self.cached_header, self.cached_sql] = self.compile();
+                self.compilation_cached = true;
+            end
+            s = self.cached_sql;
+            % [~, s] = self.compile();
         end
         
         function schema = get.schema(self)
-            schema = self.getSchema;
+            schema = self.getSchema();
         end
         
         function names = get.primaryKey(self)
@@ -59,6 +72,11 @@ classdef GeneralRelvar < matlab.mixin.Copyable
             else
                 names = {self.header(~[self.header.iskey]).name};
             end
+        end
+        
+        function set.restrictions(self, r)
+            self.restrictions = r;
+            self.compilation_cached = false; %#ok<MCSUP>
         end
         
         function clause = whereClause(self)
@@ -93,22 +111,22 @@ classdef GeneralRelvar < matlab.mixin.Copyable
                     for iField = ix
                         v = s.(header(iField).name);
                         if isnumeric(v)
-                            if ismember(class(v),{'double','single'})
+                            if isa(v, 'double') || isa(v, 'single')
                                 fprintf('  %16g',v)
                             else
                                 fprintf('  %16d',v)
-                            end
+                            end 
                         else
                             fprintf('  %16.16s',v)
                         end
                     end
-                    fprintf \n
+                    fprintf '\n'
                 end
                 if nTuples > maxRows
                     for iField = ix
                         fprintf('  %16s','...')
                     end
-                    fprintf \n
+                    fprintf '\n'
                 end
             end
             
@@ -152,10 +170,10 @@ classdef GeneralRelvar < matlab.mixin.Copyable
         end
         
         function clip(self)
-            % dj.GeneralRelvar/clip - copy into clipboard the matlab code to re-generate
+            % dj.GeneralRelvar/clip - copy into clipboard the matlab code to re-generate 
             % the contents of the relation. Only scalar numeric or string values are allowed.
             % This function may be useful for creating matlab code that fills a table with values.
-            %
+            % 
             % USAGE:
             %    r.clip
             
@@ -220,9 +238,9 @@ classdef GeneralRelvar < matlab.mixin.Copyable
             
             [limit, args] = makeLimitClause(varargin{:});
             self = self.pro(args{:});
-            [header, sql] = self.compile;
+            % [header, sql] = self.compile;
             ret = self.schema.conn.query(sprintf('SELECT %s FROM %s%s', ...
-                makeAttrList(header), sql, limit));
+                makeAttrList(self.header), self.sql, limit));
             ret = dj.struct.fromFields(ret);
         end
         
@@ -305,9 +323,9 @@ classdef GeneralRelvar < matlab.mixin.Copyable
             
             % submit query
             self = self.pro(args{:});  % this copies the object, so now it's a different self
-            [header, sql] = self.compile;
+            %[header, sql] = self.compile;
             ret = self.schema.conn.query(sprintf('SELECT %s FROM %s%s%s',...
-                makeAttrList(header), sql, limit));
+                makeAttrList(self.header), self.sql, limit));
             
             % copy into output arguments
             varargout = cell(length(specs));
@@ -513,7 +531,29 @@ classdef GeneralRelvar < matlab.mixin.Copyable
             ret = init(dj.GeneralRelvar, 'join', {self arg});
         end
         
-        
+        function ret = restrict_by_subtable(self, subtable, sub_tuples)
+            % dj.GeneralRelvar/restrict_by_subtable
+            % Returns a restriction based on an exact subtable match
+            % 
+            % SYNTAX:
+            %   r = rel.restrict_by_subtable( subtable, sub_tuples )
+            % INPUTS:
+            %   subtable   - Relvar that shares this table's primary keys
+            %   sub_tuples - Struct array of subtable's non-key fields
+            %
+            % If we think of the main table ("rel" in the syntax above) as
+            % comprising a set of subtable tuples, then this is analogous
+            % to the "&" operator, but operating on sets of tuples
+            candidates = self.copy;
+            for sub_tuple = sub_tuples'
+                % Must contain each of the specified subtable tuples
+                candidates.restrict(subtable & sub_tuple);
+            end
+            % Disqualify those that contain any other subtable tuple
+            disqualifiers = subtable - sub_tuples;
+            ret = candidates - disqualifiers;
+            % Done!
+        end
         
         %%%%% DEPRECATED RELATIIONAL OPERATORS (for backward compatibility)
         function ret = times(self, arg)
@@ -642,7 +682,7 @@ classdef GeneralRelvar < matlab.mixin.Copyable
             
             % enclose in parentheses if necessary
             if enclose==1 && haveAliasedAttrs ...
-                    || enclose==2 && (~ismember(self.operator, {'table', 'join'}) || ~isempty(self.restrictions)) ...
+                    || enclose==2 && (~any(strcmp(self.operator, {'table', 'join'})) || ~isempty(self.restrictions)) ...
                     || enclose==3 && strcmp(self.operator, 'aggregate')
                 [attrStr, header] = makeAttrList(header);
                 sql = sprintf('(SELECT %s FROM %s) AS `$a%x`', attrStr, sql, aliasCount);
@@ -721,7 +761,7 @@ for arg = restrictions
             [condAttrs, condSQL] = cond.compile;
             
             % isolate previous projection (if not already)
-            if ismember(cond.operator, {'pro','aggregate'}) && isempty(cond.restrictions)
+            if any(strcmp(cond.operator, {'pro','aggregate'})) && isempty(cond.restrictions)
                 [attrStr, condAttrs] = makeAttrList(condAttrs);
                 condSQL = sprintf('(SELECT %s FROM %s) as `$u%x`', attrStr, condSQL, aliasCount);
             end
@@ -778,8 +818,20 @@ cond = cond(min(end,5):end);  % strip " OR "
                 value = sprintf('''%s''', escapeString(value));
             else
                 assert((isnumeric(value) || islogical(value)) && isscalar(value), ...
-                    'Value for key.%s must be a numeric scalar', field{1});
-                value=sprintf('%1.16g', value);
+                  'Value for key.%s must be a numeric scalar', field{1});
+                % Deal with "decimal" types specially
+                fieldtype = header(iField).type;
+                if strncmp(fieldtype,'decimal',7)
+                    % Round the value based on the decimal precision
+                    comma = strfind(fieldtype,',');
+                    paren = strfind(fieldtype,')');
+                    decprecision = str2double(fieldtype(comma+1:paren-1));
+                    valueformat = sprintf('%%1.%df',decprecision);
+                    value = sprintf(valueformat,value);
+                else
+                    % For everything else
+                    value=sprintf('%1.16g',value);
+                end
             end
             subcond = sprintf('%s AND `%s`=%s', ...
                 subcond, header(iField).name, value);
@@ -836,6 +888,15 @@ for iAttr=1:length(params)
             if ~isempty(toks)
                 %add computed attribute
                 ix = length(header)+1;
+                % We need to find a more general way to distinguish
+                % computed string attributes from computed numeric attributes
+                if strfind(lower(toks{1}{1}), 'group_concat')
+                    computedIsString = true;
+                    computedIsNumeric = false;
+                else
+                    computedIsNumeric = true;
+                    computedIsString = false;
+                end
                 header(ix) = struct(...
                     'table','', ...
                     'name', toks{1}{2}, ...
@@ -843,9 +904,10 @@ for iAttr=1:length(params)
                     'type','<sql_computed>',...
                     'isnullable', false,...
                     'comment','server-side computation', ...
+                    'isautoincrement', false, ...
                     'default', [], ...
-                    'isNumeric', true, ...  % only numeric computations allowed for now, deal with character string expressions somehow
-                    'isString', false, ...
+                    'isNumeric', computedIsNumeric, ...
+                    'isString', computedIsString, ...
                     'isBlob', false, ...
                     'alias', toks{1}{1});
             else

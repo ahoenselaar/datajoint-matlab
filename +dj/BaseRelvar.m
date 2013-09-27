@@ -10,6 +10,10 @@ classdef BaseRelvar < dj.GeneralRelvar
         tab     % associated table
     end
     
+    properties(Dependent, SetAccess = private)
+        lastInsertID  % Value of Last auto_incremented primary key 
+    end
+    
     methods
         function self = init(self, table)
             switch true
@@ -28,6 +32,13 @@ classdef BaseRelvar < dj.GeneralRelvar
         end
         
         
+        function id = get.lastInsertID(self)
+            % query MySQL for the last auto_incremented key
+            ret = query(self.schema.conn, 'SELECT last_insert_id() as `lid`');
+            id = ret.lid;
+        end
+      
+        
         function delQuick(self)
             % dj.BaseRelvar/delQuick - remove all tuples of the relation from its table.
             % Unlike dj.BaseRelvar/del, delQuick does not prompt for user
@@ -37,9 +48,10 @@ classdef BaseRelvar < dj.GeneralRelvar
         end
       
         
-        function del(self)
-            % dj.BaseRelvar/del - remove all tuples of the relation from its table
-            % and, recursively, all matching tuples in dependent tables.
+        
+        function success = del(self, do_prompt)
+            % dj.BaseRelvar/del - remove all tuples of relation self from its table
+            % as well as all dependent tuples in dependent tables.
             %
             % A summary of the data to be removed will be provided followed by
             % an interactive confirmation before deleting the data.
@@ -52,17 +64,22 @@ classdef BaseRelvar < dj.GeneralRelvar
             %
             % See also dj.BaseRelvar/delQuick, dj.Table/drop
             
+            if nargin < 2
+                do_prompt = true;
+            end
             self.schema.conn.cancelTransaction  % exit ongoing transaction, if any
+            success = false;
             
             if ~self.exists
                 disp 'nothing to delete'
+                success = true;
             else
                 % warn the user if deleting from a subtable
-                if ismember(self.tab.info.tier, {'imported','computed'}) ...
+                if do_prompt && ismember(self.tab.info.tier, {'imported','computed'}) ...
                         && ~isa(self, 'dj.AutoPopulate')
                     fprintf(['!!! %s is a subtable. For referential integrity, ' ...
                         'delete from its parent instead.\n'], class(self))
-                    if ~strcmpi('yes', input('Proceed anyway? yes/no >','s'))
+                    if ~strcmpi('yes', input('Prceed anyway? yes/no >','s'))
                         disp 'delete cancelled'
                         return
                     end
@@ -109,7 +126,7 @@ classdef BaseRelvar < dj.GeneralRelvar
                 end
                 
                 % confirm and delete
-                if ~strcmpi('yes', input('Proceed to delete? yes/no >', 's'))
+                if do_prompt && ~strcmpi('yes', input('Proceed to delete? yes/no >', 's'))
                     disp 'delete canceled'
                 else
                     self.schema.conn.startTransaction
@@ -120,9 +137,9 @@ classdef BaseRelvar < dj.GeneralRelvar
                                 rels{iRel}.tab.fullTableName, rels{iRel}.whereClause))
                             fprintf '(not committed)\n'
                         end
-                        fprintf 'committing ...'
                         self.schema.conn.commitTransaction
-                        disp done
+                        fprintf ' ** delete committed\n'
+                        success = true;
                     catch err
                         fprintf '\n ** delete rolled back due to to error\n'
                         self.schema.conn.cancelTransaction
@@ -132,6 +149,47 @@ classdef BaseRelvar < dj.GeneralRelvar
             end
         end
         
+        
+        function validateDecimalData(self, tuples, rel_err_tol)
+            % validateDecimalData(self, tuples, [rel_err_tol=Inf])
+            % Check given tuples will convert correctly to decimal datatype
+            %
+            % Only checks decimal datatype fields. The optional argument
+            % will check that the relative error induced by conversion
+            % falls below a specified bound.
+            if nargin < 3
+                rel_err_tol = Inf;
+            end
+            header = self.tab.header;
+            % Restrict to decimal datatype cols present in the given tuples
+            is_decimal = strncmpi({header.type},'decimal',7);
+            is_given = ismember({header.name},fieldnames(tuples));
+            for col_idx = find(is_decimal & is_given)
+                % Parse the decimal value range from the datatype
+                type_spec  = header(col_idx).type;
+                prec_scale = sscanf(type_spec, 'decimal(%d,%d)');
+                prec   = prec_scale(1);
+                scale  = prec_scale(2);
+                maxval = 10^(prec-scale) - 10^(-scale);
+                % Check that they fall within range
+                col_name = header(col_idx).name;
+                vals = [tuples.(col_name)];
+                assert( all(abs( vals ) <= maxval), ...
+                    'dj:validateDecimalData:OutOfRange', ...
+                    'Values for field "%s" out of range', col_name );
+                % Check that they meet conversion accuracy
+                ulp = 10^(-scale);
+                rounded = round(vals / ulp) * ulp;
+                rel_err = (rounded - vals) ./ vals;
+                nondiv0 = vals ~= 0;
+                assert( all(abs(rel_err(nondiv0)) < rel_err_tol), ...
+                    'dj:validateDecimalData:PoorAccuracy', ...
+                    'Values for field "%s" have excessive roundoff error',...
+                    col_name );
+                % Go on to the next column
+            end
+            % Done!
+        end
         
         function insert(self, tuples, command)
             % insert an array of tuples directly into the table
@@ -164,6 +222,13 @@ classdef BaseRelvar < dj.GeneralRelvar
                     fnames{find(~found,1,'first')}, class(self));
             end
             
+            % Validate decimal datatype value ranges
+            validateDecimalData(self, tuples);
+            
+            % Cache some values for efficiency
+	        full_tab_name = self.tab.fullTableName;
+            connection = self.schema.conn;
+            
             % form query
             ix = ismember({header.name}, fnames);
             for tuple=tuples(:)'
@@ -194,7 +259,7 @@ classdef BaseRelvar < dj.GeneralRelvar
                         if islogical(v)  % mym doesn't accept logicals - save as unit8 instead
                             v = uint8(v);
                         end
-                        assert(isscalar(v) && isnumeric(v),...
+                        assert((isscalar(v) && isnumeric(v)) || isempty(v),...
                             'The field %s must be a numeric scalar value', ...
                             header(i).name)
                         if strcmp(header(i).type, 'bigint')
@@ -203,7 +268,10 @@ classdef BaseRelvar < dj.GeneralRelvar
                         elseif strcmp(header(i).type, 'bigint unsigned')
                             queryStr = sprintf('%s`%s`=%u,',...
                                 queryStr, header(i).name, v);
-                        elseif ~isnan(v)  % nans are not passed: assumed missing.
+                        elseif isempty(v) && header(i).isautoincrement
+                            queryStr = sprintf('%s`%s`=NULL,',...
+                                queryStr, header(i).name);
+                        elseif ~isnan(v) && ~isempty(v)  % nans are not passed: assumed missing.
                             queryStr = sprintf('%s`%s`=%1.16g,',...
                                 queryStr, header(i).name, v);
                         end
@@ -211,8 +279,8 @@ classdef BaseRelvar < dj.GeneralRelvar
                 end
                 
                 % issue query
-                self.schema.conn.query( sprintf('%s %s SET %s', ...
-                    command, self.tab.fullTableName, ...
+                connection.query( sprintf('%s %s SET %s', ...
+                    command, full_tab_name, ...
                     queryStr(1:end-1)), blobs{:})
             end
         end

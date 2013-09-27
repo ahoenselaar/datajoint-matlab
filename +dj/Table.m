@@ -177,8 +177,14 @@ classdef (Sealed) Table < handle
             
             for i=find(ismember({self.header.name}, keyFields))
                 comment = self.header(i).comment;
-                str = sprintf('%s\n%-40s# %s', str, ...
-                    sprintf('%-16s: %s', self.header(i).name, self.header(i).type), ...
+                if self.header(i).isautoincrement
+                    auto_increment = 'AUTO_INCREMENT';
+                else
+                    auto_increment = '';
+                end
+                str = sprintf('%s\n%-60s# %s', str, ...
+                    sprintf('%-28s: %s %s', self.header(i).name, ...
+                    self.header(i).type, auto_increment), ...
                     comment);
             end
             
@@ -212,8 +218,14 @@ classdef (Sealed) Table < handle
                 end
                 
                 comment = self.header(i).comment;
+                if self.header(i).isautoincrement
+                    auto_increment = 'AUTO_INCREMENT';
+                else
+                    auto_increment = '';
+                end
                 str = sprintf('%s\n%-60s# %s', str, ...
-                    sprintf('%-28s: %s', [self.header(i).name default], self.header(i).type), ...
+                    sprintf('%-28s: %s', [self.header(i).name default], ...
+                    [self.header(i).type ' ' auto_increment]), ...
                     comment);
             end
             str = sprintf('%s\n', str);
@@ -385,6 +397,16 @@ classdef (Sealed) Table < handle
                     allIndexes(selIndexToDrop));
             else
                 error('Could not locate specfied index in database.')
+            end
+        end
+        
+        function forceUniqueConstraint(self, name, fieldList)
+            % Forces a unique constraint into the table, even if it
+            % affects a column with a foreign key on it.
+            allIndexes = self.getDatabaseIndexes();
+            if ~ismember(name, {allIndexes.name})
+                self.alter(sprintf('ADD UNIQUE INDEX `%s` (%s)', ...
+                    name, fieldList));
             end
         end
         

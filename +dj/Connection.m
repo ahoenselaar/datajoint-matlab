@@ -98,16 +98,24 @@ classdef Connection < handle
             % dj.Connection/query - query(connection, queryStr, varargin) issue an
             % SQL query and return the result if any.
             % The same connection is re-used by all DataJoint objects.
-            if ~self.isConnected
-                self.connId=mym('open', self.host, self.user, self.password);
-                if ~isempty(self.initQuery)
-                    self.query(self.initQuery);
+            try
+                if ~self.isConnected
+                    self.connId=mym('open', self.host, self.user, self.password);
+                    if ~isempty(self.initQuery)
+                        self.query(self.initQuery);
+                    end
                 end
-            end
-            if nargout>0
-                ret=mym(self.connId, queryStr, varargin{:});
-            else
-                mym(self.connId, queryStr, varargin{:});
+                if nargout>0
+                    ret=mym(self.connId, queryStr, varargin{:});
+                else
+                    mym(self.connId, queryStr, varargin{:});
+                end
+            catch sql_error
+                if regexp(sql_error.message, '^Duplicate entry.*', 'once')
+                    error('mym:duplicate_entry', sql_error.message)
+                else
+                    rethrow(sql_error);
+                end
             end
         end
         
