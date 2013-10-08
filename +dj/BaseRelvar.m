@@ -251,9 +251,6 @@ classdef BaseRelvar < dj.GeneralRelvar
                     elseif header(i).isBlob
                         queryStr = sprintf('%s`%s`="{M}",', ...
                             queryStr,header(i).name);
-                        if islogical(v) % mym doesn't accept logicals - save as uint8 instead
-                            v = uint8(v);
-                        end
                         blobs{end+1} = v;    %#ok<AGROW>
                     else
                         if islogical(v)  % mym doesn't accept logicals - save as unit8 instead
@@ -262,16 +259,16 @@ classdef BaseRelvar < dj.GeneralRelvar
                         assert((isscalar(v) && isnumeric(v)) || isempty(v),...
                             'The field %s must be a numeric scalar value', ...
                             header(i).name)
-                        if ~isnan(v)  % nans are not passed: assumed missing.
+                        if isempty(v) && header(i).isautoincrement
+                                queryStr = sprintf('%s`%s`=NULL,',...
+                                    queryStr, header(i).name);
+                        elseif ~isnan(v)  % nans are not passed: assumed missing.
                             if strcmp(header(i).type, 'bigint')
                                 queryStr = sprintf('%s`%s`=%d,',...
                                     queryStr, header(i).name, v);
                             elseif strcmp(header(i).type, 'bigint unsigned')
                                 queryStr = sprintf('%s`%s`=%u,',...
                                     queryStr, header(i).name, v);
-                            elseif isempty(v) && header(i).isautoincrement
-                                queryStr = sprintf('%s`%s`=NULL,',...
-                                    queryStr, header(i).name);
                             elseif ~isempty(v)  % nans are not passed: assumed missing.
                                 queryStr = sprintf('%s`%s`=%1.16g,',...
                                     queryStr, header(i).name, v);
