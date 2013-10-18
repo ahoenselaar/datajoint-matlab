@@ -28,6 +28,12 @@ classdef (Sealed) Table < handle
         header    % structure array describing header
         fullTableName  % `database`.`plain_table_name`
         plainTableName  % just the table name
+        parents      % names of tables referenced by foregin keys composed exclusively of primary key attributes
+        references   % names of tables referenced by foreign keys composed of primary and non-primary attributes
+        children     % names of tables referencing this table with their primary key attributes
+        referencing  % names of tables referencing this table with their primary and non-primary attributes
+        
+        descendants  % names of all dependent tables, recursively, in order of dependencies
     end
     
     properties(Constant)
@@ -43,9 +49,11 @@ classdef (Sealed) Table < handle
         function self = Table(className, declaration)
             % obj = dj.Table('package.className')
             self.className = className;
-            assert(ischar(self.className),  ...
+            dj.assert(ischar(self.className) && ~isempty(self.className),  ...
                 'dj.Table requres input ''package.ClassName''')
-            assert(~isempty(regexp(self.className,'^\w+\.[A-Z]\w+','once')), ...
+            dj.assert(self.className(1)~='$', ...
+                'Please activate package for %s', self.className)
+            dj.assert(~isempty(regexp(self.className,'^\w+\.[A-Z]\w+','once')), ...
                 'invalid table identification ''%s''. Should be package.ClassName', ...
                 self.className)
             if nargin>=2
@@ -57,9 +65,9 @@ classdef (Sealed) Table < handle
         function ret = get.schema(self)
             if isempty(self.schema)
                 schemaFunction = regexprep(self.className, '\.\w+$', '.getSchema');
-                assert(~isempty(which(schemaFunction)), ['Not found: ' schemaFunction])
+                dj.assert(~isempty(which(schemaFunction)), ['Could not find ' schemaFunction])
                 self.schema = feval(schemaFunction);
-                assert(isa(self.schema, 'dj.Schema'), ...
+                dj.assert(isa(self.schema, 'dj.Schema'), ...
                     [schemaFunction ' must return an instance of dj.Schema'])
             end
             ret = self.schema;
@@ -67,9 +75,9 @@ classdef (Sealed) Table < handle
         
         
         function info = get.info(self)
-            if ~self.exists   % table does not exist. Create it.
+            if ~self.isCreated   % table does not exist. Create it.
                 self.create
-                assert(self.exists, 'Table %s is not found', self.className)
+                dj.assert(self.isCreated, 'Table %s is not found', self.className)
             end
             info = self.schema.tables(strcmp(self.className, self.schema.classNames));
         end
@@ -91,6 +99,59 @@ classdef (Sealed) Table < handle
         end
         
         
+        function list = get.parents(self)
+            list = self.schema.classNames(self.schema.dependencies(strcmp(self.className, self.schema.classNames),:)==1);
+            list = cellfun(@(name) self.schema.conn.getPackage(name), list, 'uniformOutput', false);
+        end
+        
+        
+        function list = get.references(self)
+            list = self.schema.classNames(self.schema.dependencies(strcmp(self.className, self.schema.classNames),:)==2);
+            list = cellfun(@(name) self.schema.conn.getPackage(name), list, 'uniformOutput', false);
+        end
+        
+        
+        function list = get.children(self)
+            list = self.schema.classNames(self.schema.dependencies(:,strcmp(self.className, self.schema.classNames))==1);
+            list = cellfun(@(name) self.schema.conn.getPackage(name), list, 'uniformOutput', false);
+        end
+        
+        
+        function list = get.referencing(self)
+            list = self.schema.classNames(self.schema.dependencies(:,strcmp(self.className, self.schema.classNames))==2);
+            list = cellfun(@(name) self.schema.conn.getPackage(name), list, 'uniformOutput', false);
+        end
+        
+        
+        function list = get.descendants(self)
+            list = recurse(self,'');
+            levels = nan(length(list),1);      % level in dependency chain
+            newLevels = zeros(length(list),1);
+            while ~all(newLevels==levels)
+                levels = newLevels;
+                newLevels = [0; arrayfun(@(x) max(levels(strcmp({list.name},x.parent)))+1,list(2:end))];
+                dj.assert(max(newLevels)<5000,'Circular dependencies are prohibited')
+            end
+            
+            % Eliminate duplicates by picking the entry with the highest
+            % dependency level and then sort by dependency level.
+            % We sort, pick and sort again. One could rely on a specific
+            % behavior of unique but that changed from 2011/2012 to 2013.
+            [levels,ix] = sort(levels);
+            [list,~,il] = unique({list(ix).name});
+            ix = arrayfun(@(x) find(il==x, 1, 'last'), 1:numel(list));
+            [~,ix] = sort(levels(ix));
+            list = list(ix);
+            
+            function list = recurse(table,parent)
+                toAdd = cellfun(@(name) recurse(dj.Table(name),table.className), ...
+                    [table.children table.referencing], 'UniformOutput',false);
+                list = cat(1, struct('name', table.className, 'parent', parent), toAdd{:});
+            end
+        end
+        
+        
+
         function display(self)
             fprintf \n
             for i=1:numel(self)
@@ -112,7 +173,7 @@ classdef (Sealed) Table < handle
             % that are connected to self.
             %
             % SYNTAX
-            %   table.erd([depth1[,depth2]])
+            %   table.erd([depth1,depth2]])
             %
             % depth1 and depth2 specify the connectivity radius upstream
             % (depth<0) and downstream (depth>0) of this table.
@@ -121,24 +182,39 @@ classdef (Sealed) Table < handle
             %
             % Examples:
             %   t = dj.Table('vis2p.Scans');
-            %   t.erd       % plot two levels above and below
-            %   t.erd( 2);  % plot dependents up to 2 levels below
-            %   t.erd(-1);  % plot only immediate ancestors
+            %   t.erd(-1,1)  % plot immediate ancestors and descendants
+            %   t.erd(-1,0)  % plot only immediate ancestors
+            %   t.erd(-2,2)  % plot two levels in each direction
+            %   t.erd    -- same as t.erd(-2,2)
             %
             % See also dj.Schema/erd
-            if ~self.exists
+            if ~self.isCreated
                 self.create
             end
-            switch nargin
-                case 1
-                    depth1 = -2;
-                    depth2 = +2;
-                case 2
-                    depth2 = max(0, depth1);
-                    depth1 = min(0, depth1);
+            if nargin<=1
+                depth1 = -2;
+                depth2 = +2;
             end
-            
-            self.schema.erd(self.getNeighbors(depth1, depth2))
+            dj.assert(depth1<=0 && depth2>=0);
+            subset = {self.className};
+            tabs = self;
+            for i=1:max(-depth1,depth2)
+                newTabs = {};
+                for tab = tabs
+                    new = [];
+                    if i<=-depth1
+                        new = [new tab.parents tab.references]; %#ok<AGROW>
+                    end
+                    if i<=depth2
+                        new = [new tab.children tab.referencing]; %#ok<AGROW>
+                    end
+                    subset = union(subset, new);
+                    new = new(cellfun(@(x) x(1)~='$',new)); % do not expand unloaded schemas
+                    newTabs = [newTabs cellfun(@(x) dj.Table(x), new, 'UniformOutput', false)]; %#ok<AGROW>
+                end
+                tabs = [newTabs{:}];
+            end
+            self.schema.erd(subset)
         end
         
         
@@ -166,7 +242,7 @@ classdef (Sealed) Table < handle
             end
             str = sprintf('%s%s (%s) # %s', ...
                 str, self.className, self.info.tier, self.info.comment);
-            assert(any(strcmp(self.schema.classNames, self.className)), ...
+            dj.assert(any(strcmp(self.schema.classNames, self.className)), ...
                 'class %s does not appear in the class list of the schema', self.className);
             
             % list primary key fields
@@ -174,7 +250,7 @@ classdef (Sealed) Table < handle
             
             if ~expandForeignKeys
                 % list parent references
-                [classNames,tables] = getSortedForeignKeys(self, self.schema.getParents(self.className, 1));
+                [classNames,tables] = self.sortForeignKeys(self.parents);
                 if ~isempty(classNames)
                     str = sprintf('%s%s',str,sprintf('\n-> %s',classNames{:}));
                     for t = tables
@@ -206,12 +282,12 @@ classdef (Sealed) Table < handle
             
             % list other references
             if ~expandForeignKeys
-                [classNames,tables] = getSortedForeignKeys(self, self.schema.getParents(self.className, 2));
+                [classNames,tables] = self.sortForeignKeys(self.references);
                 if ~isempty(classNames)
                     str = sprintf('%s%s',str,sprintf('\n-> %s',classNames{:}));
                     for t = tables
                         % exclude primary key fields of referenced tables from header
-                        dependentFields = dependentFields(~ismember(keyFields, {t.header([t.header.iskey]).name}));
+                        dependentFields = dependentFields(~ismember(dependentFields, {t.header([t.header.iskey]).name}));
                     end
                 end
             end
@@ -320,7 +396,7 @@ classdef (Sealed) Table < handle
             % "newDefinition"
             doPrompt = nargin < 4 || doPrompt;
             sql = fieldToSQL(parseAttrDef(newDefinition, false));
-            self.alter(sprintf('CHANGE COLUMN `%s` %s', attrName, sql(1:end-2)),doPrompt);
+            self.alter(sprintf('CHANGE COLUMN `%s` %s', attrName, sql(1:end-2)));
         end
         
         function addForeignKey(self, target)
@@ -369,19 +445,19 @@ classdef (Sealed) Table < handle
             if ischar(indexAttributes)
                 indexAttributes = {indexAttributes};
             end
-            assert(~isempty(indexAttributes) && ...
+            dj.assert(~isempty(indexAttributes) && ...
                 all(ismember(indexAttributes, {self.header.name})), ...
                 'Index definition contains invalid attribute names');
             % Don't allow indexes that may conflict with foreign keys
             implicitIndexes = self.getImplicitIndexes;
-            assert( ~any(arrayfun( ...
+            dj.assert( ~any(arrayfun( ...
                 @(x) isequal(x.attributes, indexAttributes), ...
                 implicitIndexes)), ...
                 ['The specified set of attributes is implicitly ' ...
                 'indexed because of a foreign key constraint.']);
             % Prevent interference with existing indexes
             allIndexes = self.getDatabaseIndexes;
-            assert( ~any(arrayfun( ...
+            dj.assert( ~any(arrayfun( ...
                 @(x) isequal(x.attributes, indexAttributes), ...
                 allIndexes)), ...
                 ['Only one index can be specified for any tuple ' ...
@@ -409,7 +485,7 @@ classdef (Sealed) Table < handle
             
             % Don't touch indexes introduced by foreign keys
             implicitIndexes = self.getImplicitIndexes;
-            assert( ~any(arrayfun( ...
+            dj.assert(~any(arrayfun( ...
                 @(x) isequal(x.attributes, indexAttributes), ...
                 implicitIndexes)), ...
                 ['The specified set of attributes is indexed ' ...
@@ -425,7 +501,7 @@ classdef (Sealed) Table < handle
                 arrayfun(@(x) self.alter(sprintf('DROP INDEX `%s`', x.name)), ...
                     allIndexes(selIndexToDrop));
             else
-                error('Could not locate specfied index in database.')
+                dj.assert(false, 'Could not locate specfied index in database.')
             end
         end
         
@@ -446,12 +522,12 @@ classdef (Sealed) Table < handle
             % This method is useful if the table definition has been
             % changed by other means than the regular datajoint definition
             % process.
-            doPrompt = nargin<2 || doPrompt;
             path = which(self.className);
             if isempty(path)
                 fprintf('File %s.m is not found\n', self.className);
             else
-                if doPrompt && ~strcmpi('yes', input(sprintf('Update table declaration in %s? yes/no > ',path), 's'))
+                if ~dj.set('suppressPrompt') ...
+                        && ~strcmpi('yes', input(sprintf('Update table declaration in %s? yes/no > ',path), 's'))
                     disp 'No? Table declaration left unpdated.'
                 else
                     % read old file
@@ -488,15 +564,9 @@ classdef (Sealed) Table < handle
         function list = getEnumValues(self, attr)
             % returns the list of allowed values for the attribute attr of type enum
             ix = strcmpi(attr, {self.header.name});
-            if ~any(ix)
-                throw(MException('DataJoint:invalidAttributeName', ...
-                    'attribute "%s" not found', attr))
-            end
+            dj.assert(any(ix), 'Attribute "%s" not found', attr)
             list = regexpi(self.header(ix).type,'^enum\((?<list>''.*'')\)$', 'names');
-            if isempty(list)
-                throw(MException('DataJoint:invalidAttributeName', ...
-                    'attribute "%s" not of type ENUM', attr))
-            end
+            dj.assert(~isempty(list), 'Attribute "%s" not of type ENUM', attr)
             list = regexp(list.list,'''(?<item>[^'']+)''','names');
             list = {list.item};
         end
@@ -516,131 +586,60 @@ classdef (Sealed) Table < handle
             %
             % See also dj.Table, dj.BaseRelvar/del
             
-            if ~self.exists
+            if ~self.isCreated
                 disp 'Nothing to drop'
-                return
-            end
-            
-            self.schema.conn.cancelTransaction   % exit ongoing transaction
-            % warn user if self is a subtable
-            if ismember(self.info.tier, {'imported','computed'}) && ...
-                    ~isempty(which(self.className))
-                rel = eval(self.className);
-                if ~isa(rel,'dj.AutoPopulate')
-                    fprintf(['\n!!! %s is a subtable. For referential integrity, ' ...
-                        'drop its parent table instead.\n'], self.className)
-                    if ~strcmpi('yes', input('Proceed anyway? yes/no >','s'))
-                        fprintf '\ndrop cancelled\n\n'
-                        return
-                    end
-                end
-            end
-            
-            % compile the list of dropped tables
-            doDrop = true;
-            fprintf 'ABOUT TO DROP TABLES: \n'
-            names = {self.className};
-            tables = self;
-            new = self;
-            n = count(init(dj.BaseRelvar, self));
-            fprintf('%20s (%s,%5d tuples)\n', self.fullTableName, self.info.tier, n)
-            doDrop = doDrop && ~n;   % drop without prompt if empty
-            
-            while ~isempty(new)
-                curr = new(1);
-                new(1) = [];
-                sch = curr.schema;
-                ixCurr = strcmp(sch.classNames, curr.className);
-                j = find(sch.dependencies(:,ixCurr));
-                j = j(~ismember(sch.classNames(j),names));  % remove duplicates
-                j = j(:)';
-                children = sch.classNames(j);
-                names = [names children]; %#ok<AGROW>
-                for j=1:length(children)
-                    child = sch.conn.getPackage(children{j});
-                    if child(1) == '$'  % ignore unloaded schemas
-                        throw(MException('DataJoint:dropTable', ...
-                            'cannot drop %s because its schema is not loaded', child))
-                    else
-                        table = dj.Table(child);
-                        n = count(init(dj.BaseRelvar, table));
-                        fprintf('%20s (%s,%5d tuples)\n', table.fullTableName, table.info.tier, n)
-                        tables(end+1) = table; %#ok<AGROW>
-                        new(end+1) = table; %#ok<AGROW>
-                        doDrop = doDrop && ~n;   % drop without prompt if empty
-                    end
-                end
-            end
-            
-            % if any table has data, give option to cancel
-            if ~doDrop && ~strcmpi('yes', input('Proceed to drop? yes/no >', 's'));
-                disp 'User cancelled table drop'
             else
-                try
-                    for table = tables(end:-1:1)
-                        self.schema.conn.query(sprintf('DROP TABLE %s', table.fullTableName))
-                        fprintf('Dropped table %s\n', table.fullTableName)
+                doPrompt = false;  % don't prompt if tables are empty
+                self.schema.conn.cancelTransaction   % exit ongoing transaction
+                % warn user if self is a subtable
+                if ismember(self.info.tier, {'imported','computed'}) && ...
+                        ~isempty(which(self.className))
+                    rel = eval(self.className);
+                    if ~isa(rel,'dj.AutoPopulate') && ~dj.set('suppressPrompt')
+                        fprintf(['\n!!! %s is a subtable. For referential integrity, ' ...
+                            'drop its parent table instead.\n'], self.className)
+                        if ~strcmpi('yes', input('Proceed anyway? yes/no >','s'))
+                            fprintf '\ndrop cancelled\n\n'
+                            return
+                        end
                     end
-                catch err
-                    self.schema.conn.reload
-                    rethrow(err)
                 end
-                % reload all schemas
-                self.schema.conn.reload
+                fprintf 'ABOUT TO DROP TABLES: \n'
+                tables = cellfun(@(x) dj.Table(x), self.descendants, 'UniformOutput', false);
+                tables = [tables{:}];
+                for table = tables
+                    n = count(init(dj.BaseRelvar,table));
+                    fprintf('%20s (%s,%5d tuples)\n', table.fullTableName, table.info.tier, n)
+                    doPrompt = doPrompt || n;   % prompt if not empty
+                end
+                
+                % if any table has data, give option to cancel
+                doPrompt = doPrompt && ~dj.set('suppressPrompt');  % suppress prompt
+                if doPrompt && ~strcmpi('yes', input('Proceed to drop? yes/no >', 's'));
+                    disp 'User cancelled table drop'
+                else
+                    try
+                        for table = tables(end:-1:1)
+                            self.schema.conn.query(sprintf('DROP TABLE %s', table.fullTableName))
+                            fprintf('Dropped table %s\n', table.fullTableName)
+                        end
+                    catch err
+                        self.schema.conn.reload
+                        rethrow(err)
+                    end
+                    % reload all schemas
+                    self.schema.conn.reload
+                end
+                fprintf \n
             end
-            fprintf \n
         end
     end
     
     methods(Access=private)
         
-        function yes = exists(self)
+        function yes = isCreated(self)
             yes = any(strcmp(self.className, self.schema.classNames));
         end
-        
-        
-        function neighbors = getNeighbors(self, depth1, depth2, crossSchemas)
-            % dj.Table/getNeighbors -- get the class names of tables that are
-            % directly related to the given table.
-            %
-            % depth1 and depth2 specify the connectivity radius upstream
-            % (depth<0) and downstream (depth>0) of this table.
-            % Omitting both depths defaults to (-2,2).
-            % Omitting any one of the depths sets it to zero.
-            %
-            % If crossSchemas is set to true, the search cascades into other schemas.
-            %
-            % Examples:
-            %   table.getNeighbors(-1,0)     % get table's parents
-            %   table.getNeighbors(0,1)      % get table's children
-            %   table.getNeighbors(-2,2)     % two levels up and down
-            
-            crossSchemas = nargin>=4 && crossSchemas;
-            
-            % find tables on which self depends
-            neighbors = {self.className};
-            nodes = {self.className};
-            for j=1:-depth1
-                nodes = unique(self.schema.getParents(nodes,[1 2],crossSchemas));
-                if isempty(nodes)
-                    break
-                end
-                neighbors(ismember(neighbors,nodes))=[];
-                neighbors = [nodes neighbors];  %#ok:<AGROW>
-            end
-            
-            % find tables dependent on self
-            nodes = {self.className};
-            for j=1:depth2
-                nodes = unique(self.schema.getChildren(nodes,[1 2],crossSchemas));
-                if isempty(nodes)
-                    break;
-                end
-                neighbors(ismember(neighbors,nodes))=[];
-                neighbors = [neighbors nodes];  %#ok:<AGROW>
-            end
-        end
-        
         
         
         function declaration = getDeclaration(self)
@@ -650,11 +649,11 @@ classdef (Sealed) Table < handle
                 declaration = self.declaration;
             else
                 file = which(self.className);
-                assert(~isempty(file), 'DataJoint:MissingTableDefnition', ...
-                    'Could not find table definition file %s', file)
+                dj.assert(~isempty(file), ...
+                    'MissingTableDefinition:Could not find table definition file %s', file)
                 declaration = readPercentBraceComment(file);
-                assert(~isempty(declaration), 'DataJoint:MissingTableDefnition', ...
-                    'Could not find the table declaration in %s', file)
+                dj.assert(~isempty(declaration), ...
+                    'MissingTableDefnition:Could not find the table declaration in %s', file)
             end
         end
         
@@ -664,7 +663,7 @@ classdef (Sealed) Table < handle
             [tableInfo, parents, references, fieldDefs, indexDefs] = ...
                 parseDeclaration(self.getDeclaration);
             cname = sprintf('%s.%s', tableInfo.package, tableInfo.className);
-            assert(strcmp(cname, self.className), ...
+            dj.assert(strcmp(cname, self.className), ...
                 'Table name %s does not match in file %s', cname, self.className)
             
             % compile the CREATE TABLE statement
@@ -682,7 +681,7 @@ classdef (Sealed) Table < handle
                     field = parents{iRef}.table.header(iField);
                     if ~ismember(field.name, primaryKeyFields)
                         primaryKeyFields{end+1} = field.name;   %#ok<AGROW>
-                        assert(~field.isnullable, 'primary key header cannot be nullable')
+                        dj.assert(~field.isnullable, 'primary key header cannot be nullable')
                         sql = sprintf('%s%s', sql, fieldToSQL(field));
                     end
                 end
@@ -693,7 +692,7 @@ classdef (Sealed) Table < handle
                 for iField = find([fieldDefs.iskey])
                     field = fieldDefs(iField);
                     primaryKeyFields{end+1} = field.name;  %#ok<AGROW>
-                    assert(~strcmpi(field.default,'NULL'), ...
+                    dj.assert(~strcmpi(field.default,'NULL'), ...
                         'primary key header cannot be nullable')
                     sql = sprintf('%s%s', sql, fieldToSQL(field));
                 end
@@ -720,7 +719,7 @@ classdef (Sealed) Table < handle
             end
             
             % add primary key declaration
-            assert(~isempty(primaryKeyFields), 'table must have a primary key')
+            dj.assert(~isempty(primaryKeyFields), 'table must have a primary key')
             str = sprintf(',`%s`', primaryKeyFields{:});
             sql = sprintf('%sPRIMARY KEY (%s),\n',sql, str(2:end));
             
@@ -742,10 +741,10 @@ classdef (Sealed) Table < handle
             end
             
             for iIndex = 1:numel(indexDefs)
-                assert(all(ismember(indexDefs(iIndex).attributes, ...
+                dj.assert(all(ismember(indexDefs(iIndex).attributes, ...
                     [primaryKeyFields, nonKeyFields])), ...
                     'Index definition contains invalid attribute names');
-                assert(~any(cellfun( ...
+                dj.assert(~any(cellfun( ...
                     @(x) isequal(x, indexDefs(iIndex).attributes), ...
                     implicitIndexes)), ...
                     ['The specified set of attributes is implicitly ' ...
@@ -762,7 +761,7 @@ classdef (Sealed) Table < handle
             sql = sprintf('%s\n) ENGINE = InnoDB, COMMENT "%s$"', sql(1:end-2), tableInfo.comment);
             
             self.schema.reload   % again, ensure that the table does not already exist
-            if ~self.exists
+            if ~self.isCreated
                 % execute declaration
                 fprintf \n<SQL>\n
                 disp(sql)
@@ -809,16 +808,36 @@ classdef (Sealed) Table < handle
             end
         end
         
+        
         function indexInfo = getImplicitIndexes(self)
             % dj.Table/getImplicitIndexes
             % Returns database indexes that are implied by
             % table relationships and should not be shown to the user
             % or modified by the user
             indexInfo = struct('attributes', {}, 'unique', {});
-            for refClassName = self.schema.getParents(self.className)
+            for refClassName = [self.references self.parents]
                 refObj = dj.Table(self.schema.conn.getPackage(refClassName{1},true));
                 indexInfo(end+1).attributes = ...
                     {refObj.header([refObj.header.iskey]).name};  %#ok<AGROW>
+            end
+        end
+        
+        
+        
+        function [classNames,tables] = sortForeignKeys(self, classNames)
+            % sort referenced tables so that they reproduce the correct
+            % order of primary key attributes
+            tables = cellfun(@(x) dj.Table(self.schema.conn.getPackage(x,true)), classNames,'uni',false);
+            tables = [tables{:}];
+            if isempty(tables)
+                classNames = {};
+            else
+                fkFields = arrayfun(@(x) {x.header([x.header.iskey]).name}, tables,'uni',false);
+                fkOrder = cellfun(@(s) cellfun(@(x) find(strcmp(x,{self.header.name})), s), fkFields, 'uni', false);
+                m = max(cellfun(@max, fkOrder));
+                [~,fkOrder] = sort(cellfun(@(x) sum((x-1).*m.^-(1:length(x))), fkOrder));
+                tables = tables(fkOrder);
+                classNames ={tables.className};
             end
         end
     end
@@ -833,7 +852,7 @@ function str = readPercentBraceComment(filename)
 % reads the initial comment block %{ ... %} in filename
 
 f = fopen(filename, 'rt');
-assert(f~=-1, 'Could not open %s', filename)
+dj.assert(f~=-1, 'Could not open %s', filename)
 str = '';
 
 % skip all lines that do not begin with a %{
@@ -877,7 +896,7 @@ else
         default = sprintf('NOT NULL DEFAULT %s', default);
     end
 end
-assert(~any(ismember(field.comment, '"\')), ... % TODO: escape isntead
+dj.assert(~any(ismember(field.comment, '"\')), ... % TODO: escape isntead
     'illegal characters in attribute comment "%s"', field.comment)
 sql = sprintf('`%s` %s %s COMMENT "%s",\n', ...
     field.name, field.type, default, field.comment);
@@ -910,10 +929,10 @@ pat = {
     '#\s*(?<comment>\S.*\S)$'                 % # comment
     };
 tableInfo = regexp(declaration{1}, cat(2,pat{:}), 'names');
-assert(numel(tableInfo)==1, ...
-    'incorrect syntax is table declaration, line 1')
-assert(ismember(tableInfo.tier, dj.Schema.allowedTiers),...
-    ['Invalid tier for table ' tableInfo.className])
+dj.assert(numel(tableInfo)==1, ...
+    'invalidTableDeclaration:Incorrect syntax in table declaration, line 1')
+dj.assert(ismember(tableInfo.tier, dj.Schema.allowedTiers),...
+    'invalidTableTier:Invalid tier for table ', tableInfo.className)
 
 if nargout > 1
     % parse field declarations and references
@@ -926,7 +945,7 @@ if nargout > 1
             case strncmp(line,'->',2)
                 % foreign key
                 p = feval(strtrim(line(3:end)));
-                assert(isa(p, 'dj.Relvar'), 'foreign keys must be base relvars')
+                dj.assert(isa(p, 'dj.Relvar'), 'foreign keys must be base relvars')
                 if inKey
                     parents{end+1} = p;     %#ok:<AGROW>
                 else
@@ -936,11 +955,13 @@ if nargout > 1
                 % parse index definition
                 indexInfo = parseIndexDef(line);
                 indexDefs = [indexDefs, indexInfo]; %#ok<AGROW>
-            case regexp(line, '^[a-z][a-z\d_]*\s*(=\s*\S+\s*)?:\s*\w[^#]*\S\s*#.*$')
+            case regexp(line, ['^[a-z][a-z\d_]*\s*' ...       % name
+                    '(=\s*\S+(\s+\S+)*\s*)?' ...              % opt. default
+                    ':\s*\w[^#]*\S\s*#.*$'])                  % type, comment
                 fieldInfo = parseAttrDef(line, inKey);
                 fieldDefs = [fieldDefs fieldInfo];  %#ok:<AGROW>
             otherwise
-                error('Invalid table declaration line "%s"', line)
+                dj.assert(false, 'Invalid table declaration line "%s"', line)
         end
     end
 end
@@ -960,15 +981,13 @@ fieldInfo = regexp(line, cat(2,pat{:}), 'names');
 if isempty(fieldInfo)
     % try no default value
     fieldInfo = regexp(line, cat(2,pat{[1 3 4]}), 'names');
-    assert(~isempty(fieldInfo), 'invalid field declaration line: %s', line)
+    dj.assert(~isempty(fieldInfo), 'invalid field declaration line "%s"', line)
     fieldInfo.default = '<<<no default>>>';  % special value indicating no default
 end
-assert(numel(fieldInfo)==1, 'Invalid field declaration "%s"', line)
-if ~isempty(regexp(fieldInfo.type,'^(tiny|small|medium|big)?int', 'once')) ...
-        && strcmp(fieldInfo.default,'null')
-    throw(MException('DataJoint:invalidDeclaration', ...
-        'Integer attributes cannot be nullable in "%s"', line))
-end
+dj.assert(numel(fieldInfo)==1, 'Invalid field declaration "%s"', line)
+dj.assert(isempty(regexp(fieldInfo.type,'^bigint', 'once')) ...
+    || ~strcmp(fieldInfo.default,'null'), ...
+    'invalidDeclaration:BIGINT attributes cannot be nullable in "%s"', line)
 fieldInfo.iskey = inKey;
 end
 
@@ -981,10 +1000,10 @@ pat = [
     '\((?<attributes>[^\)]+)\)$'          % (attr1, attr2)
     ];
 indexInfo = regexpi(line, pat, 'names');
-assert(numel(indexInfo)==1 && ~isempty(indexInfo.attributes), ...
+dj.assert(numel(indexInfo)==1 && ~isempty(indexInfo.attributes), ...
     'Invalid index declaration "%s"', line)
 attributes = textscan(indexInfo.attributes, '%s', 'delimiter',',');
 indexInfo.attributes = strtrim(attributes{1});
-assert(numel(unique(indexInfo.attributes)) == numel(indexInfo.attributes), ...
+dj.assert(numel(unique(indexInfo.attributes)) == numel(indexInfo.attributes), ...
     'Duplicate attributes in index declaration "%s"', line)
 end

@@ -41,7 +41,7 @@ classdef Schema < handle
     
     methods
         function self = Schema(conn, package, dbname)
-            assert(isa(conn, 'dj.Connection'), ...
+            dj.assert(isa(conn, 'dj.Connection'), ...
                 'dj.Schema''s first input must be a dj.Connection')
             self.conn = conn;
             self.package = package;
@@ -150,11 +150,11 @@ classdef Schema < handle
             
             useGUI = usejava('desktop') || usejava('awt') || usejava('swing');
             className = regexp(className,'^[A-Z][A-Za-z0-9]*$','match','once');
-            assert(~isempty(className), 'invalid class name')
+            dj.assert(~isempty(className), 'invalid class name')
             
             % get the path to the schema package
             filename = fileparts(which(sprintf('%s.getSchema', self.package)));
-            assert(~isempty(filename), 'could not find +%s/getSchema.m', self.package);
+            dj.assert(~isempty(filename), 'could not find +%s/getSchema.m', self.package);
             
             % if the file already exists, let the user edit it and exit
             filename = fullfile(filename, [className '.m']);
@@ -195,13 +195,13 @@ classdef Schema < handle
             end
             
             f = fopen(filename,'wt');
-            assert(-1 ~= f, 'Could not open %s', filename)
+            dj.assert(-1 ~= f, 'Could not open %s', filename)
             
             % table declaration
             if numel(existingTable)
                 fprintf(f, '%s', existingTable.re);
-                parentIndices = self.getParents([self.package '.' className]);
-                parentIndices(end) = [];  % remove this table
+                tab = dj.Table([self.package '.' className]);
+                parents = tab.parents;
             else
                 fprintf(f, '%%{\n');
                 fprintf(f, '%s.%s (%s) # my newest table\n', self.package, className, tier);
@@ -209,7 +209,7 @@ classdef Schema < handle
                 fprintf(f, '-----\n');
                 fprintf(f, '# add additional attributes\n');
                 fprintf(f, '%%}');
-                parentIndices = [];
+                parents = [];
             end
             % class definition
             fprintf(f, '\n\nclassdef %s < dj.Relvar', className);
@@ -222,13 +222,13 @@ classdef Schema < handle
             fprintf(f, '\t\ttable = dj.Table(''%s.%s'')\n', self.package, className);
             if isAuto && ~isSubtable
                 fprintf(f, '\t\tpopRel');
-                for i = 1:length(parentIndices)
+                for i = 1:length(parents)
                     if i>1
                         fprintf(f, '*');
                     else
                         fprintf(f, ' = ');
                     end
-                    fprintf(f, '%s', self.classNames{parentIndices(i)});
+                    fprintf(f, '%s', parents{i});
                 end
                 fprintf(f, '  %% !!! update the populate relation\n');
             end
@@ -275,7 +275,7 @@ classdef Schema < handle
                 % limit the diagram to the specified subset of tables
                 ix = find(~ismember(subset,self.classNames));
                 if ~isempty(ix)
-                    error('Unknown table %d', subset(ix(1)));
+                    dj.assert(false,'Unknown table %d', subset(ix(1)))
                 end
             end
             subset = cellfun(@(x) find(strcmp(x,self.classNames)), subset);
@@ -358,7 +358,7 @@ classdef Schema < handle
                 else
                     if exist(name,'class')
                         rel = feval(name);
-                        assert(isa(rel, 'dj.Relvar'))
+                        dj.assert(isa(rel, 'dj.Relvar'))
                         if rel.isSubtable
                             name = [name '*'];  %#ok:AGROW
                         end
@@ -381,7 +381,7 @@ classdef Schema < handle
                 'Interpreter', 'none', 'fontsize', 14,'FontWeight','bold', 'FontName', 'Ariel')
             
             function connectNodes(x, y, lineStyle)
-                assert(length(x)==2 && length(y)==2)
+                dj.assert(length(x)==2 && length(y)==2)
                 plot(x, y, 'k.')
                 t = 0:0.05:1;
                 x = x(1) + (x(2)-x(1)).*(1-cos(t*pi))/2;
@@ -412,16 +412,14 @@ classdef Schema < handle
             if nargin<4
                 restrictor = {};
             end
-            assert(all(ismember(tiers, dj.Schema.allowedTiers)))
+            dj.assert(all(ismember(tiers, dj.Schema.allowedTiers)))
             backupDir = fullfile(backupDir, self.dbname);
             if ~exist(backupDir, 'dir')
-                assert(mkdir(backupDir), ...
-                    'Could not create directory %s', backupDir)
+                dj.assert(mkdir(backupDir), 'Could not create directory %s', backupDir)
             end
             backupDir = fullfile(backupDir, datestr(now,'yyyy-mm-dd'));
             if ~exist(backupDir,'dir')
-                assert(mkdir(backupDir), ...
-                    'Could not create directory %s', backupDir)
+                dj.assert(mkdir(backupDir), 'Could not create directory %s', backupDir)
             end
             ix = find(ismember({self.tables.tier}, tiers));
             % save in hiearchical order
@@ -453,7 +451,7 @@ classdef Schema < handle
                     objects{i} = eval(classes{i});
                     objects{i}.header;  % this will trigger the creation of a table if missing.
                 catch err
-                    warning('DataJoint:invalidClass', err.message)
+                    dj.assert(false,['!invalidClass:;' err.message])
                     continue
                 end
             end
@@ -476,7 +474,7 @@ classdef Schema < handle
                     fprintf('inserting %d tuples into %s\n', length(s.contents), classes{i})
                     objects{i}.insert(s.contents, 'INSERT IGNORE');
                 catch err
-                    warning('DataJoint:TableDeclarationMismatch', err.message)
+                    dj.assert(false,['!TableDeclarationMismatch:' err.message])
                 end
             end
         end
@@ -541,7 +539,7 @@ classdef Schema < handle
                 validFields = [self.header.isNumeric] | [self.header.isString] | [self.header.isBlob];
                 if ~all(validFields)
                     ix = find(~validFields, 1, 'first');
-                    error('unsupported field type "%s" in %s.%s', ...
+                    dj.assert(false,'unsupported field type "%s" in %s.%s', ...
                         self.header(ix).type, self.header.table(ix), self.header.name(ix));
                 end
             end
@@ -559,60 +557,30 @@ classdef Schema < handle
         end
 
         
-        function names = getParents(self, className, hierarchy, crossSchemas)
-            % retrieve the class names of the parents of given table classes
-            if nargin<3
-                hierarchy = [1 2];
-            end
-            crossSchemas = nargin>=4 && crossSchemas;
-            names = self.getRelatives(className, true, hierarchy, crossSchemas);
-        end
         
-        
-        function names = getChildren(self, className, hierarchy, crossSchemas)
-            % retrieve the class names of the parents of given table classes
-            if nargin<3
-                hierarchy = [1 2];
-            end
-            crossSchemas = nargin>=4 && crossSchemas;
-            names = self.getRelatives(className, false, hierarchy, crossSchemas);
-        end
-        
-        
-        function names = getRelatives(self, className, up, hierarchy, crossSchemas)
-            % gets the list of parent tables (up=true) or children tables (up=false)
-            names = {};
-            if ~isempty(className)
-                if ischar(className)
-                    if crossSchemas || className(1)~='$'
-                        className = self.conn.getPackage(className);
-                        pack = strtok(className,'.');
-                        if ~strcmp(pack, self.package) && crossSchemas
-                            % parents from other packages
-                            otherSchema = eval([pack '.getSchema']);
-                            names = [names ...
-                                otherSchema.getRelatives(className, up, hierarchy, crossSchemas)];
-                        else
-                            ix = strcmp(self.classNames, className);
-                            if any(ix)
-                                if up
-                                    names = self.classNames(ismember(self.dependencies(ix,:),hierarchy));
-                                else
-                                    names = self.classNames(ismember(self.dependencies(:,ix),hierarchy));
-                                end
-                            end
-                        end
-                    end
-                elseif iscellstr(className)
-                    for i=1:length(className)
-                        newNames = self.getRelatives(className{i}, up, hierarchy, crossSchemas);
-                        if up
-                            names = [newNames names];    %#ok:AGROW
-                        else
-                            names = [names newNames];    %#ok:AGROW
-                        end
-                    end
+        function display(self)
+            for i=1:numel(self)
+                fprintf('\nDataJoint schema %s, stored in MySQL database %s', ...
+                    self(i).package, self(i).dbname)
+                if ~isempty(self(i).prefix)
+                    fprintf(' with table prefix %s\n\n', self(i).prefix)
+                else
+                    fprintf \n\n
                 end
+                fprintf('%-25s%-16s%s\n%s\n', 'Table name', 'Tier', 'Comment', ...
+                    repmat('#', 1, 80))
+                for j=1:numel(self(i).tables)
+                    tableName = dj.Schema.toCamelCase(self(i).tables(j).name);
+                    fprintf('<a href="matlab:display(%s)">%s</a>%s%-16s%s\n', ...
+                        [self(i).classNames{j} '().table'], ...
+                        tableName, ...
+                        repmat(' ', 1, max(0, 25-numel(tableName))), ...
+                        self(i).tables(j).tier, ...
+                        self(i).tables(j).comment)
+                end
+                fprintf('\n<a href="matlab:erd(''%s'')">%s</a>\n', ...
+                    self(i).package, ...
+                    'Show entity relationship diagram')
             end
         end
         
@@ -654,7 +622,7 @@ classdef Schema < handle
             if ix
                 db = [db '/' tab(1:ix(1)-1)];
                 tab = tab(ix(1)+1:end);
-            end            
+            end
             str = self.conn.getPackage(['$' db '.' dj.Schema.toCamelCase(tab)]);
         end
     end
@@ -673,9 +641,9 @@ classdef Schema < handle
             %   toCamelCase('One_Two_Three')  --> !error! upper case only mixes with alphanumericals
             %   toCamelCase('5_two_three')    --> !error! cannot start with a digit
             
-            assert(isempty(regexp(str, '\s', 'once')), 'white space is not allowed')
-            assert(~ismember(str(1), '0':'9'), 'string cannot begin with a digit')
-            assert(isempty(regexp(str, '[A-Z]', 'once')), ...
+            dj.assert(isempty(regexp(str, '\s', 'once')), 'white space is not allowed')
+            dj.assert(~ismember(str(1), '0':'9'), 'string cannot begin with a digit')
+            dj.assert(isempty(regexp(str, '[A-Z]', 'once')), ...
                 'underscore_compound_words must not contain uppercase characters')
             str = regexprep(str, '(^|[_\W]+)([a-zA-Z])', '${upper($2)}');
         end
@@ -691,10 +659,10 @@ classdef Schema < handle
             %   fromCamelCase('one two three')  --> !error! white space is not allowed
             %   fromCamelCase('ABC')            --> 'a_b_c'
             
-            assert(isempty(regexp(str, '\s', 'once')), 'white space is not allowed')
-            assert(~ismember(str(1), '0':'9'), 'string cannot begin with a digit')
+            dj.assert(isempty(regexp(str, '\s', 'once')), 'white space is not allowed')
+            dj.assert(~ismember(str(1), '0':'9'), 'string cannot begin with a digit')
             
-            assert(~isempty(regexp(str, '^[a-zA-Z0-9]*$', 'once')), ...
+            dj.assert(~isempty(regexp(str, '^[a-zA-Z0-9]*$', 'once')), ...
                 'fromCamelCase string can only contain alphanumeric characters');
             str = regexprep(str, '([A-Z])', '_${lower($1)}');
             str = str(1+(str(1)=='_'):end);  % remove leading underscore

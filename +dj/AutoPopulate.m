@@ -189,7 +189,8 @@ classdef AutoPopulate < handle
                 if ~total
                     disp 'Nothing to populate'
                 else
-                    fprintf('%2.2f%% complete (%d remaining)\n', 100-100*double(remaining)/double(total), remaining)
+                    fprintf('%2.2f%% complete (%d remaining)        Time %s\n', ...
+                        100-100*double(remaining)/double(total), remaining, datestr(now,'HH:MM:SS'))
                 end
             end
         end
@@ -284,7 +285,7 @@ classdef AutoPopulate < handle
                             end
                         end
                         if ~success
-                            fprintf('** %s: skipping already reserved', self.table.className)
+                            fprintf('** %s: skipping already reserved\n', self.table.className)
                             disp(key)
                         end
                 end
@@ -344,17 +345,21 @@ classdef AutoPopulate < handle
         function populateSanityChecks(self)
             % Performs sanity checks that are common to populate, parpopulate
             % and batch_populate
-            if ~isempty(self.restrictions)
-                throwAsCaller(MException('DataJoint:invalidInput', ...
-                    'Cannot populate a restricted relation. Correct syntax: populate(rel, restriction)'))
-            end
-            if ~isa(self.popRel, 'dj.GeneralRelvar')
-                throwAsCaller(MException('DataJoint:invalidInput', ...
-                    'property popRel must be a subclass of dj.GeneralRelvar'))
-            end
-            if ~all(ismember(self.popRel.primaryKey, self.primaryKey))
-                throwAsCaller(MException('DataJoint:invalidPopRel', ...
-                    sprintf('%s.popRel''s primary key is too specific, move it higher in data hierarchy', class(self))))
+            if dj.set('populateCheck')
+                dj.assert(isempty(self.restrictions), ...
+                    'Cannot populate a restricted relation. Correct syntax: populate(rel, restriction)')
+                dj.assert(isa(self.popRel, 'dj.GeneralRelvar'), ...
+                    'property popRel must be a subclass of dj.GeneralRelvar')
+                dj.assert(all(ismember(self.popRel.primaryKey, self.primaryKey)), ...
+                    '%s.popRel''s primary key is too specific, move it higher in data hierarchy', class(self))
+                if self.useReservations
+                    abovePopRel = setdiff(self.primaryKey(1:length(self.popRel.primaryKey)), self.popRel.primaryKey);
+                    if ~isempty(abovePopRel)
+                        dj.assert(false, ...
+                            ['!Primary key attribute %s is above popRel''s primary key attributes. '...
+                            'Transaction timeouts may occur. See DataJoint tutorial and issue #6'], abovePopRel{1})
+                    end
+                end
             end
             if self.useReservations
                 abovePopRel = setdiff(self.primaryKey(1:length(self.popRel.primaryKey)), self.popRel.primaryKey);

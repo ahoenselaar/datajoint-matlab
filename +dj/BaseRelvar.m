@@ -22,7 +22,7 @@ classdef BaseRelvar < dj.GeneralRelvar
                 case isa(table, 'dj.BaseRelvar')
                     init@dj.GeneralRelvar(self, 'table', {table.tab}, table.restrictions);
                 otherwise
-                    throwAsCaller(MException('BaseRelvar requires a dj.Table object'))
+                    dj.assert(false, 'BaseRelvar requires a dj.Table object')
             end
         end
         
@@ -43,10 +43,9 @@ classdef BaseRelvar < dj.GeneralRelvar
             % dj.BaseRelvar/delQuick - remove all tuples of the relation from its table.
             % Unlike dj.BaseRelvar/del, delQuick does not prompt for user
             % confirmation, nor does it attempt to cascade down to the dependent tables.
-            
             self.schema.conn.query(sprintf('DELETE FROM %s', self.sql))
         end
-      
+        
         
         
         function success = del(self, do_prompt)
@@ -59,7 +58,7 @@ classdef BaseRelvar < dj.GeneralRelvar
             % EXAMPLES:
             %   del(common.Scans) % delete all tuples from table Scans and all tuples in dependent tables.
             %   del(common.Scans & 'mouse_id=12') % delete all Scans for mouse 12
-            %   del(common.Scans - tp.Cells)  % delete all tuples from table common.Scans 
+            %   del(common.Scans - tp.Cells)  % delete all tuples from table common.Scans
             %                                   that do not have matching tuples in table Cells
             %
             % See also dj.BaseRelvar/delQuick, dj.Table/drop
@@ -84,58 +83,40 @@ classdef BaseRelvar < dj.GeneralRelvar
                         return
                     end
                 end
-                               
-                % compile the list of relvars to be deleted
-                disp 'ABOUT TO DELETE:'
-                fprintf('%4d tuples from %s (%s)\n', ...
-                    self.count, self.tab.fullTableName, self.tab.info.tier)
-
-                names = {self.tab.className};
-                rels = {self};
-                new = struct('rel',self,'restrictByMe',~isempty(self.restrictions));
-                while ~isempty(new)
-                    curr = new(1);
-                    new(1) = [];
-                    sch = curr.rel.schema;
-                    ixCurr = strcmp(sch.classNames, curr.rel.tab.className);
-                    j = find(sch.dependencies(:,ixCurr));
-                    j = j(~ismember(sch.classNames(j),names));  % remove duplicates
-                    j = j(:)';  
-                    primary = full(sch.dependencies(j,ixCurr))==1;
-                    children = sch.classNames(j);                
-                    names = [names children]; %#ok<AGROW>
-                    for j=1:length(children)
-                        child = sch.conn.getPackage(children{j},false);
-                        if child(1) == '$'  % ignore unloaded schemas
-                            warning('Ignoring %s because its schema is not loaded.', child)
+                
+                % compile the list of relvars to be deleted from
+                list = self.tab.descendants;
+                rels = cellfun(@(name) init(dj.BaseRelvar, dj.Table(name)), list, 'UniformOutput', false);
+                rels = [rels{:}];
+                
+                % apply proper restrictions
+                restrictByMe = arrayfun(@(rel) any(ismember(rel.tab.references, list)), rels);  % restrict by all association tables
+                restrictByMe(1) = ~isempty(self.restrictions); % if self has restrictions, then restrict by self
+                for i=1:length(rels)
+                    for ix = cellfun(@(child) find(strcmp(child,list)), [rels(i).tab.children rels(i).tab.referencing])
+                        if restrictByMe(i)
+                            rels(ix).restrict(rels(i));
                         else
-                            if curr.restrictByMe
-                                rel = init(dj.BaseRelvar, dj.Table(child)) & curr.rel;
-                            else
-                                rel = init(dj.BaseRelvar, dj.Table(child)) & curr.rel.restrictions;
-                            end
-                            n = rel.count;
-                            if n
-                                fprintf('%4d tuples from %s (%s)\n', ...
-                                    n, rel.tab.fullTableName, rel.tab.info.tier)
-                                rels{end+1} = rel; %#ok<AGROW>
-                                new(end+1) = struct('rel', rel,'restrictByMe', ~primary(j)); %#ok<AGROW>
-                            end
+                            rels(ix).restrict(rels(i).restrictions{:});
                         end
                     end
                 end
                 
+                fprintf '\nABOUT TO DELETE:'
+                for rel=rels
+                    fprintf('\n%8d tuples from %s (%s)', rel.count, rel.tab.fullTableName, rel.tab.info.tier)
+                end
+                fprintf \n\n
+                
                 % confirm and delete
-                if do_prompt && ~strcmpi('yes', input('Proceed to delete? yes/no >', 's'))
+                if ~dj.set('suppressPrompt') && ~strcmpi('yes', input('Proceed to delete? yes/no >', 's'))
                     disp 'delete canceled'
                 else
                     self.schema.conn.startTransaction
                     try
-                        for iRel = length(rels):-1:1
-                            fprintf('Deleting from %s... ', rels{iRel}.tab.className)
-                            self.schema.conn.query(sprintf('DELETE FROM %s%s', ...
-                                rels{iRel}.tab.fullTableName, rels{iRel}.whereClause))
-                            fprintf '(not committed)\n'
+                        for rel = fliplr(rels)
+                            fprintf('Deleting from %s\n', rel.tab.className)
+                            rel.delQuick
                         end
                         self.schema.conn.commitTransaction
                         fprintf ' ** delete committed\n'
@@ -203,24 +184,22 @@ classdef BaseRelvar < dj.GeneralRelvar
             % Duplicates, unmatched attributes, or missing required attributes will
             % cause an error, unless command is specified.
             
-            assert(isstruct(tuples), 'Tuples must be a non-empty structure array')
+            dj.assert(isstruct(tuples), 'Tuples must be a non-empty structure array')
             if isempty(tuples)
                 return
             end
             if nargin<=2
                 command = 'INSERT';
             end
-            assert(any(strcmpi(command,{'INSERT', 'INSERT IGNORE', 'REPLACE'})), ...
+            dj.assert(any(strcmpi(command,{'INSERT', 'INSERT IGNORE', 'REPLACE'})), ...
                 'invalid insert command')
             header = self.tab.header;
             
             % validate header
             fnames = fieldnames(tuples);
             found = ismember(fnames,{header.name});
-            if ~all(found)
-                error('Field %s is not found in the table %s', ...
-                    fnames{find(~found,1,'first')}, class(self));
-            end
+            dj.assert(all(found), 'Field %s is not found in the table %s', ...
+                fnames{find(~found,1,'first')}, class(self))
             
             % Validate decimal datatype value ranges
             validateDecimalData(self, tuples);
@@ -237,7 +216,7 @@ classdef BaseRelvar < dj.GeneralRelvar
                 for i = find(ix)
                     v = tuple.(header(i).name);
                     if header(i).isString
-                        assert(ischar(v), ...
+                        dj.assert(ischar(v), ...
                             'The field %s must be a character string', ...
                             header(i).name)
                         if isempty(v)
@@ -256,7 +235,7 @@ classdef BaseRelvar < dj.GeneralRelvar
                         if islogical(v)  % mym doesn't accept logicals - save as unit8 instead
                             v = uint8(v);
                         end
-                        assert((isscalar(v) && isnumeric(v)) || isempty(v),...
+                        dj.assert((isscalar(v) && isnumeric(v)) || isempty(v),...
                             'The field %s must be a numeric scalar value', ...
                             header(i).name)
                         if isempty(v) && header(i).isautoincrement
@@ -310,12 +289,12 @@ classdef BaseRelvar < dj.GeneralRelvar
             %   update(v2p.Mice & key, 'mouse_dob',   '2011-01-01')
             %   update(v2p.Scan & key, 'lens')   % set the value to NULL
             
-            assert(count(self)==1, 'Update is only allowed on one tuple at a time')
+            dj.assert(count(self)==1, 'Update is only allowed on one tuple at a time')
             isNull = nargin<3;
             header = self.header;
             ix = find(strcmp(attrname,{header.name}));
-            assert(numel(ix)==1, 'invalid attribute name')
-            assert(~header(ix).iskey, 'cannot update a key value. Use insert(..,''REPLACE'') instead')
+            dj.assert(numel(ix)==1, 'invalid attribute name')
+            dj.assert(~header(ix).iskey, 'cannot update a key value. Use insert(..,''REPLACE'') instead')
             
             switch true
                 case isNull
@@ -323,7 +302,7 @@ classdef BaseRelvar < dj.GeneralRelvar
                     value = {};
                     
                 case header(ix).isString
-                    assert(ischar(value), 'Value must be a string')
+                    dj.assert(ischar(value), 'Value must be a string')
                     queryStr = '"{S}"';
                     value = {value};
                 case header(ix).isBlob
@@ -338,9 +317,9 @@ classdef BaseRelvar < dj.GeneralRelvar
                     if islogical(value)
                         value = uint8(value);
                     end
-                    assert(isscalar(value) && isnumeric(value), 'Numeric value must be scalar')
+                    dj.assert(isscalar(value) && isnumeric(value), 'Numeric value must be scalar')
                     if isnan(value)
-                        assert(header(ix).isnullable, ...
+                        dj.assert(header(ix).isnullable, ...
                             'attribute `%s` is not nullable. NaNs not allowed', attrname)
                         queryStr = 'NULL';
                         value = {};
@@ -349,7 +328,7 @@ classdef BaseRelvar < dj.GeneralRelvar
                         value = {};
                     end
                 otherwise
-                    error 'Invalid condition: please report to DataJoint developers'
+                    dj.assert(false)
             end
             
             queryStr = sprintf('UPDATE %s SET `%s`=%s %s', ...
