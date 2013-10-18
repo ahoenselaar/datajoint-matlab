@@ -102,9 +102,9 @@ classdef GeneralRelvar < matlab.mixin.Copyable
                 s = sprintf(', %s',self.nonKeyFields{:});
                 fprintf('Dependent attributes: %s', s(2:end))
             end
+            tic
             fprintf '\n\n Contents: \n'
             if self.exists
-                tic
                 % print header
                 header = self.header;
                 ix = find( ~[header.isBlob] );  % header to display

@@ -332,9 +332,6 @@ classdef BaseRelvar < dj.GeneralRelvar
                         value = {};
                     else
                         queryStr = '"{M}"';
-                        if islogical(value)
-                            value = uint8(value);
-                        end
                         value = {value};
                     end
                 case header(ix).isNumeric
