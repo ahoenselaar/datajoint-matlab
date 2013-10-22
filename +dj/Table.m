@@ -33,7 +33,7 @@ classdef (Sealed) Table < handle
         children     % names of tables referencing this table with their primary key attributes
         referencing  % names of tables referencing this table with their primary and non-primary attributes
         
-        descendants  % names of all dependent tables, recursively, in order of dependencies
+        descendants  % names of all dependent tables, including self, recursively, in order of dependencies
     end
     
     properties(Constant)
@@ -53,7 +53,7 @@ classdef (Sealed) Table < handle
                 'dj.Table requres input ''package.ClassName''')
             dj.assert(self.className(1)~='$', ...
                 'Please activate package for %s', self.className)
-            dj.assert(~isempty(regexp(self.className,'^\w+\.[A-Z]\w+','once')), ...
+            dj.assert(~isempty(regexp(self.className,'^\w+\.[A-Z]\w*','once')), ...
                 'invalid table identification ''%s''. Should be package.ClassName', ...
                 self.className)
             if nargin>=2
@@ -124,34 +124,24 @@ classdef (Sealed) Table < handle
         
         
         function list = get.descendants(self)
-            list = recurse(self,'');
-            levels = nan(length(list),1);      % level in dependency chain
-            newLevels = zeros(length(list),1);
-            while ~all(newLevels==levels)
-                levels = newLevels;
-                newLevels = [0; arrayfun(@(x) max(levels(strcmp({list.name},x.parent)))+1,list(2:end))];
-                dj.assert(max(newLevels)<5000,'Circular dependencies are prohibited')
-            end
+            map = containers.Map('KeyType','char','ValueType','uint16');
+            recurse(self,0)
+            levels = map.values;
+            [~,order] = sort([levels{:}]);
+            list = map.keys;
+            list = list(order);
             
-            % Eliminate duplicates by picking the entry with the highest
-            % dependency level and then sort by dependency level.
-            % We sort, pick and sort again. One could rely on a specific
-            % behavior of unique but that changed from 2011/2012 to 2013.
-            [levels,ix] = sort(levels);
-            [list,~,il] = unique({list(ix).name});
-            ix = arrayfun(@(x) find(il==x, 1, 'last'), 1:numel(list));
-            [~,ix] = sort(levels(ix));
-            list = list(ix);
-            
-            function list = recurse(table,parent)
-                toAdd = cellfun(@(name) recurse(dj.Table(name),table.className), ...
-                    [table.children table.referencing], 'UniformOutput',false);
-                list = cat(1, struct('name', table.className, 'parent', parent), toAdd{:});
+            function recurse(table,level)
+                if ~map.isKey(table.className) || level>map(table.className)
+                    cellfun(@(name) recurse(dj.Table(name),level+1), ...
+                        [table.children table.referencing])
+                    map(table.className)=level;
+                end
             end
         end
         
         
-
+        
         function display(self)
             fprintf \n
             for i=1:numel(self)
@@ -795,7 +785,7 @@ classdef (Sealed) Table < handle
                 self.schema.conn.query(sprintf(...
                 ['SHOW INDEX FROM `%s` IN `%s` ' ...
                 'WHERE NOT `Key_name`="PRIMARY"'], ...
-                self.plainTableName, self.schema.dbname), 'bigint_to_double'));
+                self.plainTableName, self.schema.dbname),'bigint_to_double'));
             [indexNames, ~, indexId] = unique({indexes.Key_name});
             for iIndex=1:numel(indexNames)
                 % Get attribute names and sort by position in index
