@@ -88,6 +88,7 @@ classdef BaseRelvar < dj.GeneralRelvar
                 list = self.tab.descendants;
                 rels = cellfun(@(name) init(dj.BaseRelvar, dj.Table(name)), list, 'UniformOutput', false);
                 rels = [rels{:}];
+                rels(1) = rels(1) & self.restrictions;
                 
                 % apply proper restrictions
                 restrictByMe = arrayfun(@(rel) any(ismember(rel.tab.references, list)), rels);  % restrict by all association tables
@@ -103,10 +104,15 @@ classdef BaseRelvar < dj.GeneralRelvar
                 end
                 
                 fprintf '\nABOUT TO DELETE:'
-                for rel=rels
-                    fprintf('\n%8d tuples from %s (%s)', rel.count, rel.tab.fullTableName, rel.tab.info.tier)
+                counts = nan(size(rels));
+                for i=1:numel(rels)
+                    counts(i) = rels(i).count;
+                    if counts(i)
+                        fprintf('\n%8d tuples from %s (%s)', counts(i), rels(i).tab.fullTableName, rels(i).tab.info.tier)
+                    end
                 end
                 fprintf \n\n
+                rels = rels(counts>0);
                 
                 % confirm and delete
                 if ~dj.set('suppressPrompt') && ~strcmpi('yes', input('Proceed to delete? yes/no >', 's'))
