@@ -48,7 +48,7 @@ classdef BaseRelvar < dj.GeneralRelvar
         
         
         
-        function success = del(self, do_prompt)
+        function success = del(self)
             % dj.BaseRelvar/del - remove all tuples of relation self from its table
             % as well as all dependent tuples in dependent tables.
             %
@@ -63,9 +63,6 @@ classdef BaseRelvar < dj.GeneralRelvar
             %
             % See also dj.BaseRelvar/delQuick, dj.Table/drop
             
-            if nargin < 2
-                do_prompt = true;
-            end
             self.schema.conn.cancelTransaction  % exit ongoing transaction, if any
             success = false;
             
@@ -74,11 +71,11 @@ classdef BaseRelvar < dj.GeneralRelvar
                 success = true;
             else
                 % warn the user if deleting from a subtable
-                if do_prompt && ismember(self.tab.info.tier, {'imported','computed'}) ...
+                if ismember(self.tab.info.tier, {'imported','computed'}) ...
                         && ~isa(self, 'dj.AutoPopulate')
                     fprintf(['!!! %s is a subtable. For referential integrity, ' ...
                         'delete from its parent instead.\n'], class(self))
-                    if ~strcmpi('yes', input('Prceed anyway? yes/no >','s'))
+                    if ~dj.set('suppressPrompt') && ~strcmpi('yes', input('Proceed anyway? yes/no >','s'))
                         disp 'delete cancelled'
                         return
                     end
