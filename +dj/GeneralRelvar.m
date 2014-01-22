@@ -138,7 +138,7 @@ classdef GeneralRelvar < matlab.mixin.Copyable
             fprintf('%d tuples (%.3g s)\n\n', nTuples, toc)
         end
         
-        function view(self, varargin)
+        function h = view(self, varargin)
             % dj.Relvar/view - view the data in speadsheet form. Blobs are omitted.
             % Additional arguments are forwarded to fetch(), e.g. for ORDER BY
             % and LIMIT clauses.
