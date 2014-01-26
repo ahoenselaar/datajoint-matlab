@@ -100,8 +100,8 @@ classdef struct
                 if any(is_match)
                     % Copy the matching s2 tuples and add the p1 fields
                     add = s2(is_match);
-                    for f = f_s1only'
-                        [add.(f{1})] = deal(p1.(f{1}));
+                    for fc=1:numel(f_s1only)
+                        [add.(f_s1only{fc})] = deal(p1.(f_s1only{fc}));
                     end
                 else
                     % Copy p1 and add the fill values
