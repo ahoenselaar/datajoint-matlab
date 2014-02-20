@@ -49,7 +49,7 @@ classdef Table < handle
     methods
         function self = Table(className)
             % dj.Table with no arguments is used when dj.Table is inherited by dj.Relvar
-            % dj.Table('pakage.ClassName')  -  initialze with class name.
+            % dj.Table('package.ClassName')  -  initialze with class name.
             if nargin>=1
                 self.className = className;
             end
@@ -248,10 +248,15 @@ classdef Table < handle
             
             % additional primary attributes
             for i=find(ismember(self.tableHeader.names, keyFields))
-                comment = self.tableHeader.attributes(i).comment;
-                str = sprintf('%s\n%-40s# %s', str, ...
-                    sprintf('%-16s: %s', self.tableHeader.attributes(i).name, ...
-                    self.tableHeader.attributes(i).type), comment);
+                comment = self.tableHeader.attributes(i).comment;                
+                if self.tableHeader.attributes(i).isautoincrement
+                    auto_increment = 'AUTO_INCREMENT';
+                else
+                    auto_increment = '';
+                end
+                str = sprintf('%s\n%-40s # %s', str, ...
+                    sprintf('%-28s: %s %s', self.tableHeader.attributes(i).name, ...
+                    self.tableHeader.attributes(i).type, auto_increment), comment);
             end
             
             % dividing line
@@ -285,9 +290,14 @@ classdef Table < handle
                         default = ['="' default '"']; %#ok<AGROW>
                     end
                 end
+                if attr.isautoincrement
+                    auto_increment = 'AUTO_INCREMENT';
+                else
+                    auto_increment = '';
+                end
                 str = sprintf('%s\n%-60s# %s', str, ...
-                    sprintf('%-28s: %s', [attr.name default], attr.type), ...
-                    attr.comment);
+                    sprintf('%-28s: %s', [attr.name default], ...
+                    [attr.type ' ' auto_increment]), attr.comment);
             end
             str = sprintf('%s\n', str);
             

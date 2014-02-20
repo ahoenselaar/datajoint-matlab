@@ -95,7 +95,7 @@ classdef GeneralRelvar < matlab.mixin.Copyable
                     for iField = ix
                         v = s.(header.attributes(iField).name);
                         if isnumeric(v)
-                            if ismember(class(v),{'double','single'})
+                            if isa(v, 'double') || isa(v, 'single')
                                 fprintf('  %16g',v)
                             else
                                 fprintf('  %16d',v)
@@ -118,7 +118,7 @@ classdef GeneralRelvar < matlab.mixin.Copyable
             fprintf('%d tuples (%.3g s)\n\n', nTuples, toc)
         end
         
-        function view(self, varargin)
+        function h = view(self, varargin)
             % dj.Relvar/view - view the data in speadsheet form. Blobs are omitted.
             % Additional arguments are forwarded to fetch(), e.g. for ORDER BY
             % and LIMIT clauses.
@@ -149,7 +149,7 @@ classdef GeneralRelvar < matlab.mixin.Copyable
                 data = fetch(self, columns{:}, varargin{:});
                 hfig = figure('Units', 'normalized', 'Position', [0.1 0.1 0.5 0.4], ...
                     'MenuBar', 'none');
-                uitable(hfig, 'Units', 'normalized', 'Position', [0.0 0.0 1.0 1.0], ...
+                h = uitable(hfig, 'Units', 'normalized', 'Position', [0.0 0.0 1.0 1.0], ...
                     'ColumnName', columnName, 'ColumnEditable', false(1,length(columns)), ...
                     'ColumnFormat', format, 'Data', struct2cell(data)');
             end
@@ -503,6 +503,30 @@ classdef GeneralRelvar < matlab.mixin.Copyable
         end
         
         
+        function ret = restrict_by_subtable(self, subtable, sub_tuples)
+            % dj.GeneralRelvar/restrict_by_subtable
+            % Returns a restriction based on an exact subtable match
+            % 
+            % SYNTAX:
+            %   r = rel.restrict_by_subtable( subtable, sub_tuples )
+            % INPUTS:
+            %   subtable   - Relvar that shares this table's primary keys
+            %   sub_tuples - Struct array of subtable's non-key fields
+            %
+            % If we think of the main table ("rel" in the syntax above) as
+            % comprising a set of subtable tuples, then this is analogous
+            % to the "&" operator, but operating on sets of tuples
+            candidates = self.copy;
+            for sub_tuple = sub_tuples'
+                % Must contain each of the specified subtable tuples
+                candidates.restrict(subtable & sub_tuple);
+            end
+            % Disqualify those that contain any other subtable tuple
+            disqualifiers = subtable - sub_tuples;
+            ret = candidates - disqualifiers;
+            % Done!
+        end
+        
         
         %%%%% DEPRECATED RELATIIONAL OPERATORS (for backward compatibility)
         function ret = times(self, arg)
@@ -744,8 +768,20 @@ cond = cond(min(end,5):end);  % strip " OR "
                 value = sprintf('''%s''', escapeString(value));
             else
                 assert((isnumeric(value) || islogical(value)) && isscalar(value), ...
-                    'Value for key.%s must be a numeric scalar', field{1});
-                value=sprintf('%1.16g', value);
+                  'Value for key.%s must be a numeric scalar', field{1});
+                % Deal with "decimal" types specially
+                fieldtype = attr.type;
+                if strncmp(fieldtype,'decimal',7)
+                    % Round the value based on the decimal precision
+                    comma = strfind(fieldtype,',');
+                    paren = strfind(fieldtype,')');
+                    decprecision = str2double(fieldtype(comma+1:paren-1));
+                    valueformat = sprintf('%%1.%df',decprecision);
+                    value = sprintf(valueformat,value);
+                else
+                    % For everything else
+                    value=sprintf('%1.16g',value);
+                end
             end
             subcond = sprintf('%s AND `%s`=%s', subcond, field{1}, value);
         end

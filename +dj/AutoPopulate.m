@@ -30,10 +30,13 @@ classdef AutoPopulate < handle
     
     properties(Access=protected)
         useReservations
-        executionEngine
         jobs     % the jobs table
         timedOut % list of timedout transactions
         timeoutAttempt
+    end
+    
+    properties(Access=protected, Transient)
+        executionEngine
     end
     
     properties(Constant, Access=protected)
@@ -139,6 +142,7 @@ classdef AutoPopulate < handle
                 self.makeTuples(key)
                 self.schema.conn.commitTransaction
                 self.setJobStatus(key, 'completed');
+                self.postExecutionHook(key)
             catch err
                 self.schema.conn.cancelTransaction
                 if strncmpi(err.message, self.timeoutMessage, length(self.timeoutMessage)) && ...
@@ -355,6 +359,13 @@ classdef AutoPopulate < handle
                     end
                 end
             end
+        end
+        
+        function postExecutionHook(self, key) %#ok<INUSD>
+            % Please override. This function will be called after
+            % makeTuples if makeTuples executed without errors.
+            % Throwing an error from this hook will still completely
+            % undo the population
         end
     end
 end

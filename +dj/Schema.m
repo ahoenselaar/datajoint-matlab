@@ -182,8 +182,6 @@ classdef Schema < handle
                 self.tableNames.remove(self.tableNames.keys);
                 
                 % reload schema information into memory: table names and field named.
-                fprintf('loading table definitions from %s... ', self.dbname)
-                tic
                 tableInfo = self.conn.query(sprintf(...
                     'SHOW TABLE STATUS FROM `%s` WHERE name REGEXP "{S}"', ...
                     self.dbname),self.tableRegexp,'bigint_to_double');
@@ -193,7 +191,6 @@ classdef Schema < handle
                 re = cellfun(@(x) sprintf('^%s%s[a-z][a-z0-9_]*$',self.prefix,x), ...
                     dj.Schema.tierPrefixes, 'UniformOutput', false); % regular expressions to determine table tier
                 
-                fprintf('%.3g s\nloading field information... ', toc), tic
                 for info = dj.struct.fromFields(tableInfo)'
                     tierIdx = ~cellfun(@isempty, regexp(info.name, re, 'once'));
                     assert(sum(tierIdx)==1)
@@ -202,9 +199,7 @@ classdef Schema < handle
                     self.headers(info.name) = dj.Header.initFromDatabase(self,info);
                 end
                 
-                fprintf('%.3g s\nloading dependencies... ', toc), tic
                 self.conn.loadDependencies(self)
-                fprintf('%.3g s\n',toc)
             end
         end
         
@@ -239,6 +234,17 @@ classdef Schema < handle
                 cellfun(@(s) sprintf('`%s`.`%s`', schema.dbname, s), ...
                 schema.tableNames.values, 'uni', false), self,'uni',false);
             self(1).conn.erd([list{:}], 1, 1)
+        end
+        
+        function optimize(self)
+            % Optimize all tables in this schema
+            sel_local = strncmp([self.dbname '.'], self.classNames, ...
+                numel(self.dbname)+1);
+            for cn=self.classNames(sel_local)
+                tab = dj.Table(cn{1});
+                fprintf([cn{1} ':'])
+                tab.optimize();
+            end
         end
     end
 end
