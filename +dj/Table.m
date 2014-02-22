@@ -336,6 +336,20 @@ classdef Table < handle
         
         
         %%%%% ALTER METHODS: change table definitions %%%%%%%%%%%%
+        function alter(self, alterStatement)
+            % dj.Table/alter
+            % alter(self, alterStatement)
+            % Executes an ALTER TABLE statement for this table.
+            % The schema is reloaded and syncDef is called.
+            sql = sprintf('ALTER TABLE  %s %s', ...
+                self.fullTableName, alterStatement);
+            self.schema.conn.query(sql);
+            disp 'table updated'
+            self.schema.reload
+            self.tableHeader = [];          % Force update of cached header
+            self.syncDef
+        end
+        
         function setTableComment(self, newComment)
             % dj.Table/setTableComment - update the table comment
             % in the table declaration
@@ -726,20 +740,6 @@ classdef Table < handle
                 self.schema.conn.query(sql);
                 self.schema.reload
             end
-        end
-        
-        function alter(self, alterStatement)
-            % dj.Table/alter
-            % alter(self, alterStatement)
-            % Executes an ALTER TABLE statement for this table.
-            % The schema is reloaded and syncDef is called.
-            sql = sprintf('ALTER TABLE  %s %s', ...
-                self.fullTableName, alterStatement);
-            self.schema.conn.query(sql);
-            disp 'table updated'
-            self.schema.reload
-            self.tableHeader = [];          % Force update of cached header
-            self.syncDef
         end
         
         function indexInfo = getDatabaseIndexes(self)
