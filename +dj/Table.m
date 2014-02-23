@@ -14,7 +14,7 @@
 % the table definition file and create the table in the database.
 %
 % The syntax of the table definition can be found at
-% http://code.google.com/p/datajoint/wiki/TableDeclarationSyntax
+% https://github.com/datajoint/datajoint-matlab/wiki/Table-declaration
 
 classdef Table < handle
     
@@ -31,7 +31,7 @@ classdef Table < handle
     properties(Dependent, SetAccess = private)
         info           % table information
         fullTableName  % `database`.`plain_table_name`
-        parents        % names of tables referenced by foregin keys composed exclusively of primary key attributes
+        parents        % names of tables referenced by foreign keys composed exclusively of primary key attributes
         referenced     % names of tables referenced by foreign keys composed of primary and non-primary attributes
         children       % names of tables referencing this table with their primary key attributes
         referencing    % names of tables referencing this table with their primary and non-primary attributes
@@ -49,7 +49,7 @@ classdef Table < handle
     methods
         function self = Table(className)
             % dj.Table with no arguments is used when dj.Table is inherited by dj.Relvar
-            % dj.Table('package.ClassName')  -  initialze with class name.
+            % dj.Table('package.ClassName')  -  initialize with class name.
             if nargin>=1
                 self.className = className;
             end
@@ -248,15 +248,15 @@ classdef Table < handle
             
             % additional primary attributes
             for i=find(ismember(self.tableHeader.names, keyFields))
-                comment = self.tableHeader.attributes(i).comment;                
+                comment = self.tableHeader.attributes(i).comment;
                 if self.tableHeader.attributes(i).isautoincrement
-                    auto_increment = 'AUTO_INCREMENT';
+                    autoIncrement = 'AUTO_INCREMENT';
                 else
-                    auto_increment = '';
+                    autoIncrement = '';
                 end
                 str = sprintf('%s\n%-40s # %s', str, ...
-                    sprintf('%-28s: %s %s', self.tableHeader.attributes(i).name, ...
-                    self.tableHeader.attributes(i).type, auto_increment), comment);
+                    sprintf('%-16s: %s %s', self.tableHeader.attributes(i).name, ...
+                    self.tableHeader.attributes(i).type, autoIncrement), comment);
             end
             
             % dividing line
@@ -291,13 +291,13 @@ classdef Table < handle
                     end
                 end
                 if attr.isautoincrement
-                    auto_increment = 'AUTO_INCREMENT';
+                    autoIncrement = 'AUTO_INCREMENT';
                 else
-                    auto_increment = '';
+                    autoIncrement = '';
                 end
                 str = sprintf('%s\n%-60s# %s', str, ...
                     sprintf('%-28s: %s', [attr.name default], ...
-                    [attr.type ' ' auto_increment]), attr.comment);
+                    [attr.type ' ' autoIncrement]), attr.comment);
             end
             str = sprintf('%s\n', str);
             
@@ -441,7 +441,7 @@ classdef Table < handle
                 allIndexes)), ...
                 ['Only one index can be specified for any tuple ' ...
                 'of attributes. To change the index type, drop ' ...
-                'the exsiting index first.']);
+                'the existing index first.']);
             % Create a new index
             fieldList = sprintf('`%s`,', indexAttributes{:});
             if isUniqueIndex
@@ -480,7 +480,7 @@ classdef Table < handle
                 arrayfun(@(x) self.alter(sprintf('DROP INDEX `%s`', x.name)), ...
                     allIndexes(selIndexToDrop));
             else
-                error('Could not locate specfied index in database.')
+                error('Could not locate specified index in database.')
             end
         end
         
@@ -497,7 +497,7 @@ classdef Table < handle
             else
                 if ~dj.set('suppressPrompt') ...
                         && ~strcmpi('yes', dj.ask(sprintf('Update table declaration in %s?',path)))
-                    disp 'No? Table declaration left unpdated.'
+                    disp 'No? Table declaration left untouched.'
                 else
                     % read old file
                     f = fopen(path, 'rt');
@@ -590,7 +590,7 @@ classdef Table < handle
                     try
                         for table = tables(end:-1:1)
                             self.schema.conn.query(sprintf('DROP TABLE %s', table.fullTableName))
-                            fprintf('Dropped table %s\n', table.fullTableName)
+                            fprintf('Dropped table %s\n', table.fullTableName)                            
                         end
                     catch err
                         self.schema.conn.reload
