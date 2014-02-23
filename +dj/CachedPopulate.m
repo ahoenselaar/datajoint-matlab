@@ -6,7 +6,7 @@
 
 classdef CachedPopulate < dj.BatchPopulate
     
-    properties(Constant, Abstract)
+    properties(Abstract)
         granularityRel     % specify the relation providing granularity of cache levels
     end
 
